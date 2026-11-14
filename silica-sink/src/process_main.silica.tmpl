@@ -1,0 +1,22 @@
+// The program's entry point (contract T9.6): a failure reporter, the root supervisor, and the entry function as
+// the first process under it. The program ends when the entry process ends.
+fn region_dump_limit() -> int64 {
+    0
+}
+fn to_silica_reporter(report: string, state: int64) -> (:no_reply, int64) {
+    sequence proc[device_io]
+        _: atom <- case contains(report, ":normal") of {
+            true -> :ok;
+            false -> println_stderr(report)
+        }
+    produces pure (:no_reply, state) end
+}
+fn main() -> int64 {
+    sequence proc[concurrency, device_io]
+        rep: actor_ref <- spawn(0, to_silica_reporter, stack_policy(@RESERVE@, :@RELEASE@), state_policy(:keep_state_area));
+        _: atom <- register_failure_reporter(rep);
+        sup: supervisor_ref <- to_silica_boot();
+        _: actor_ref <- to_silica_add(sup, :@UNIT@_entry, @ENTRY@, actor_ref_of_word(0), :temporary);
+        code: int64 <- wait_for_exit()
+    produces pure code end
+}

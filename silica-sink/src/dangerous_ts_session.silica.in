@@ -1,0 +1,498 @@
+// dangerous_ts_session: the session actor (app design 3.2) and the supervisor of the pool of session actors.
+// The tree, the restart rules and the messages between the actors are described in dangerous_to_silica.
+//
+// Source file: dangerous_ts_session.silica.in; the $NAME$ placeholders are spelled out by silica-sink/tools/expand.py.
+module dangerous_ts_session;
+
+use Supervisor;
+use wire_etf;
+use wireframe;
+use Carrier;
+use ts_text;
+use ts_out;
+use ts_config;
+use ts_pool;
+use ts_reply;
+use ts_records;
+use ts_intake;
+use tcp_transport_v1;
+use ts_session;
+
+export session_sup/1;
+
+impl dangerous_ts_session for Supervisor;
+
+fn no_conns() -> $CONNS$ {
+    sequence proc[mem(normal)]
+        out: $CONNS$ <- empty[dangerous_actor_ref, mem(normal)]()
+    produces
+        pure out
+    end
+}
+
+fn one_conn(c: dangerous_actor_ref) -> $CONNS$ {
+    sequence proc[mem(normal)]
+        out: $CONNS$ <- prepend[dangerous_actor_ref, mem(normal)](c, no_conns())
+    produces
+        pure out
+    end
+}
+
+fn session_initial(slot: int64) -> $SESSION_STATE$ {
+    { conn: no_conns(), slot: slot, token: 0, rx: wireframe@fresh(Carrier@boundaries((:tcp))), id: "", sess: ts_session@fresh(), seen: 0 }
+}
+
+fn conn_tx(cs: $CONNS$, out: string) -> boolean {
+    case cs of {
+        []: $CONNS$ -> false;
+        [c: dangerous_actor_ref, _t: $CONNS$] -> case length_bytes(out) > 0 of {
+            false -> true;
+            true -> {
+                sequence proc[concurrency]
+                    b: boolean <- cast(c, (:tx, out, self()) impl ActorMessage {})
+                produces
+                    pure b
+                end
+            }
+        }
+    }
+}
+
+fn conn_credit(cs: $CONNS$) -> boolean {
+    case cs of {
+        []: $CONNS$ -> false;
+        [c: dangerous_actor_ref, _t: $CONNS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, (:credit, 1) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn conn_close(cs: $CONNS$) -> boolean {
+    case cs of {
+        []: $CONNS$ -> false;
+        [c: dangerous_actor_ref, _t: $CONNS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, :close impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn to_store_put(r: int64, slot: int64, schema: int64, etf: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:put, slot, schema, etf) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn to_store_detach(r: int64, slot: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:detach, slot) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn to_store_drop(r: int64, slot: int64, reason: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:drop, slot, reason) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn to_self_store(slot: int64, token: int64, kind: atom, text: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@session_name(slot), (:store, token, kind, text, 0) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn detach_everywhere(slot: int64, r: int64) -> boolean {
+    case r >= ts_pool@regions() of {
+        true -> true;
+        false -> {
+            _: boolean <- to_store_detach(r, slot);
+            detach_everywhere(slot, r + 1)
+        }
+    }
+}
+
+fn mode_of(phase: int64) -> atom {
+    case phase == 1 of {
+        true -> :check;
+        false -> :keep
+    }
+}
+
+// The id a check session answers with (contract T6.11); a transpile session's id is the store owner's.
+fn check_id(slot: int64, token: int64) -> string {
+    ts_text@concat4("check-", ts_text@itoa(slot), "-", ts_text@itoa(token))
+}
+
+fn shown_id(state: $SESSION_STATE$) -> string {
+    case length_bytes(state.id) == 0 of {
+        true -> check_id(state.slot, state.token);
+        false -> state.id
+    }
+}
+
+// A transpile hello was accepted (phase 3): a new session asks the first store owner for a region (the owners
+// pass the request on until one is free); a resuming hello asks the owner its session id names.
+fn ask_store(slot: int64, token: int64, session: string, hello: string) -> boolean {
+    case length_bytes(session) == 0 of {
+        true -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(0), (:lease, slot, token, 0, hello) impl ActorMessage {})
+            produces
+                pure b
+            end
+        };
+        false -> case ts_pool@region_of(session) < 0 of {
+            true -> to_self_store(slot, token, :unknown, session);
+            false -> {
+                sequence proc[concurrency]
+                    b: boolean <- cast_registered(ts_pool@store_name(ts_pool@region_of(session)), (:resume, slot, token, session, hello) impl ActorMessage {})
+                produces
+                    pure b
+                end
+            }
+        }
+    }
+}
+
+fn ask_release(slot: int64, token: int64, name: string) -> boolean {
+    case ts_pool@region_of(name) < 0 of {
+        true -> to_self_store(slot, token, :not_freed, name);
+        false -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(ts_pool@region_of(name)), (:free, slot, token, name) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn ask_mark(r: int64, slot: int64, seq: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:mark, slot, seq) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn ask_finish(r: int64, slot: int64, sess: $SESS$) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:finish, slot, sess.n.rejected, sess.q.next, ts_session@miscounts(sess)) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+// What one step asks of the store owner. was is the session's phase before the step.
+fn hand_over(state: $SESSION_STATE$, was: int64, g: $DIGEST$, st: $STEP$) -> boolean {
+    now: int64 <- st.sess.s.phase;
+    r: int64 <- ts_pool@region_of(state.id);
+    _: boolean <- case was == 0 and now == 3 of {
+        true -> ask_store(state.slot, state.token, g.text, st.keep);
+        false -> true
+    };
+    _: boolean <- case was == 0 and now == 6 of {
+        true -> ask_release(state.slot, state.token, ts_session@release_name(st.sess));
+        false -> true
+    };
+    _: boolean <- case was == 4 and length_bytes(st.keep) > 0 of {
+        true -> to_store_put(r, state.slot, ts_records@frame_schema(), st.keep);
+        false -> true
+    };
+    _: boolean <- case was == 4 and length_bytes(st.own) > 0 of {
+        true -> to_store_put(r, state.slot, ts_records@own_schema(), st.own);
+        false -> true
+    };
+    _: boolean <- case was == 4 and st.mark of {
+        true -> ask_mark(r, state.slot, st.sess.q.next);
+        false -> true
+    };
+    _: boolean <- case was == 4 and now == 5 of {
+        true -> ask_finish(r, state.slot, st.sess);
+        false -> true
+    };
+    case was == 4 and g.kind == :abort of {
+        true -> to_store_drop(r, state.slot, g.text);
+        false -> true
+    }
+}
+
+fn fault_wanted(g: $DIGEST$) -> boolean {
+    g.kind == :unit_begin and length_bytes(ts_config@fault_session()) > 0 and g.name == ts_config@fault_session()
+}
+
+// Unframes everything segment completes (wireframe answers one frame per call; an empty segment drains the next)
+// and steps the session once per frame, gathering the answers. It stops at a frame that ends the session or leaves
+// it waiting for the store owner (phases 3, 5 and 6).
+fn drain(state: $SESSION_STATE$, rx: $RX$, segment: string, sess: $SESS$, out: string) -> $DRAINED$ {
+    un: (:more, $RX$) | (:frame, string, $RX$) | (:rejected, atom) <- wireframe@unframe(rx, segment, sess.s.max_frame);
+    case un of {
+        (:more, r1: $RX$) -> { rx: r1, sess: sess, out: out, done: false, fault: false, ask: "" };
+        (:frame, frame: string, r2: $RX$) -> {
+            g: $DIGEST$ <- ts_intake@digest(tcp_transport_v1@decode_to_transpiler(frame), sess.s.silica, mode_of(sess.s.phase), "");
+            case fault_wanted(g) of {
+                true -> { rx: r2, sess: sess, out: out, done: false, fault: true, ask: "" };
+                false -> {
+                    st: $STEP$ <- ts_session@step(shown_id(state), sess, g);
+                    _: boolean <- hand_over(state, sess.s.phase, g, st);
+                    phase: int64 <- st.sess.s.phase;
+                    case st.done or phase == 3 or phase == 5 or phase == 6 of {
+                        true -> { rx: r2, sess: st.sess, out: concat(out, st.out), done: st.done, fault: false,
+                                  ask: case sess.s.phase == 0 and phase == 3 of {
+                                      true -> g.text;
+                                      false -> ""
+                                  } };
+                        false -> drain(state, r2, "", st.sess, concat(out, st.out))
+                    }
+                }
+            }
+        };
+        (:rejected, why: atom) -> { rx: rx, sess: sess, out: concat(out, ts_session@framing_failed(sess, why)), done: true, fault: false, ask: "" }
+    }
+}
+
+fn session_with(state: $SESSION_STATE$, id: string, sess: $SESS$) -> $SESSION_STATE$ {
+    { conn: state.conn, slot: state.slot, token: state.token, rx: state.rx, id: id, sess: sess, seen: state.seen }
+}
+
+// Sends bytes (if any) and then closes the connection: the session is over (phase 2). The carrier's
+// (:link_down, ...) then makes the actor idle again.
+fn finish(state: $SESSION_STATE$, out: string) -> $SESSION_STATE$ {
+    _: boolean <- conn_tx(state.conn, out);
+    _: boolean <- conn_close(state.conn);
+    session_with(state, state.id, ts_session@with_phase(state.sess, 2))
+}
+
+fn full_report(state: $SESSION_STATE$) -> string {
+    concat(ts_reply@finding_frame(0 - 1, "", :error, "T5001", "the session's storage region is full; nothing could be stored for it"),
+           ts_reply@result_frame(:failed, state.sess.n, state.id, 0))
+}
+
+// An answer from a store owner.
+fn on_store(kind: atom, text: string, num: int64, state: $SESSION_STATE$) -> $SESSION_STATE$ {
+    case kind of {
+        :leased -> {
+            st: $STEP$ <- ts_session@leased(text, state.sess, 4);
+            _: boolean <- conn_tx(state.conn, st.out);
+            _: boolean <- conn_credit(state.conn);
+            session_with(state, ts_text@fresh(text), st.sess)
+        };
+        :ended -> {
+            st: $STEP$ <- ts_session@ended(text, state.sess, num);
+            _: boolean <- conn_tx(state.conn, st.out);
+            session_with(state, ts_text@fresh(text), st.sess)
+        };
+        :stored -> {
+            st: $STEP$ <- ts_session@stored(state.sess, num);
+            _: boolean <- conn_tx(state.conn, st.out);
+            session_with(state, state.id, st.sess)
+        };
+        :busy -> finish(state, ts_reply@refused_frame(:busy, "every storage region holds a session; try later, or release a finished session (T6.13)"));
+        :unknown -> finish(state, ts_reply@refused_frame(:unknown_session, "no stored session has that id (T6.5)"));
+        :mismatch -> finish(state, ts_reply@refused_frame(:session_mismatch, "the hello differs from the hello that opened the session (T5.4)"));
+        :result -> finish(state, text);
+        :full -> finish(state, full_report(state));
+        :freed -> finish(state, ts_reply@released_frame(text, true));
+        _: atom -> finish(state, ts_reply@released_frame(text, false))
+    }
+}
+
+// One stored record of the session being resumed (contract T6.5), replayed by the store owner.
+fn rebuilt(schema: int64, record: string, state: $SESSION_STATE$) -> $SESSION_STATE$ {
+    case schema == ts_records@frame_schema() of {
+        true -> session_with(state, state.id, ts_session@replayed(state.sess, ts_intake@digest(tcp_transport_v1@decode_to_transpiler(record), state.sess.s.silica, :check, "")));
+        false -> {
+            own: $OWNSUM$ <- ts_records@summary(record);
+            case own.kind == :rejected_frame of {
+                true -> session_with(state, state.id, ts_session@replayed_rejection(state.sess, own.b == 1));
+                false -> state
+            }
+        }
+    }
+}
+
+fn ask_more(r: int64, slot: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:more, slot) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn pass_on(c: dangerous_actor_ref, n: int64, hops: int64, slot: int64) -> boolean {
+    case hops + 1 >= ts_pool@sessions() of {
+        true -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, :close impl ActorMessage {})
+            produces
+                pure b
+            end
+        };
+        false -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@session_name((slot + 1) % ts_pool@sessions()), (:adopt, c, n, hops + 1) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn adopt(c: dangerous_actor_ref, n: int64, state: $SESSION_STATE$) -> $SESSION_STATE$ {
+    sequence proc[concurrency]
+        _: boolean <- cast(c, (:open, self(), "") impl ActorMessage {})
+    produces
+        pure { conn: one_conn(c), slot: state.slot, token: n, rx: wireframe@fresh(Carrier@boundaries((:tcp))), id: "", sess: ts_session@fresh(), seen: state.seen + 1 }
+    end
+}
+
+fn is_idle(cs: $CONNS$) -> boolean {
+    case cs of {
+        []: $CONNS$ -> true;
+        [_c: dangerous_actor_ref, _t: $CONNS$] -> false
+    }
+}
+
+fn on_segment(segment: string, state: $SESSION_STATE$) -> $SESSION_STATE$ {
+    was: int64 <- state.sess.s.phase;
+    d: $DRAINED$ <- drain(state, state.rx, segment, state.sess, "");
+    now: int64 <- d.sess.s.phase;
+    // A resuming hello names its session (d.ask); the id is empty until then, so the two are simply joined. (Choosing
+    // between them with a `case` and keeping the result in the state ended the actor at the end of the dispatch:
+    // limitation observed, STATUS.md.)
+    id: string <- concat(ts_text@fresh(state.id), ts_text@fresh(d.ask));
+    next: $SESSION_STATE$ <- { conn: state.conn, slot: state.slot, token: state.token, rx: { mode: d.rx.mode, expected: d.rx.expected, pending: ts_text@fresh(d.rx.pending) }, id: id, sess: d.sess, seen: state.seen };
+    case d.fault of {
+        true -> { conn: state.conn, slot: state.slot, token: state.token, rx: state.rx, id: state.id, sess: state.sess, seen: 0 - 1 };
+        false -> case d.done of {
+            true -> {
+                _: boolean <- case was == 4 of {
+                    true -> to_store_detach(ts_pool@region_of(state.id), state.slot);
+                    false -> true
+                };
+                finish(next, d.out)
+            };
+            false -> {
+                _: boolean <- conn_tx(state.conn, d.out);
+                _: boolean <- case now == 3 or now == 5 or now == 6 of {
+                    true -> true;
+                    false -> conn_credit(state.conn)
+                };
+                next
+            }
+        }
+    }
+}
+
+// NOTE. Every `(:no_reply, state)` of a behaviour is written in the behaviour itself. When a helper function built
+// and returned that tuple, the actor ended with (:explicit, :out_of_memory) at the end of the dispatch (limitation
+// observed, STATUS.md); a helper returns the state and the behaviour wraps it.
+//
+// The session actor: one of a pool, idle until the listener owner hands it an accepted connection. It grants the
+// carrier one receive credit at a time and sends at most one segment per event. When the session is over it sends
+// :close (phase 2) and the carrier's (:link_down, ...) makes it idle. While the session waits for the store owner
+// (phases 3, 5, 6) it grants no receive credit, so nothing more arrives.
+fn session(msg: $SESSION_EVENT$, state: $SESSION_STATE$) -> (:no_reply, $SESSION_STATE$) {
+    case msg of {
+        (:boot, _z: int64) -> {
+            _: boolean <- detach_everywhere(state.slot, 0);
+            (:no_reply, state)
+        };
+        (:adopt, c: dangerous_actor_ref, n: int64, hops: int64) -> case is_idle(state.conn) of {
+            true -> (:no_reply, adopt(c, n, state));
+            false -> {
+                _: boolean <- pass_on(c, n, hops, state.slot);
+                (:no_reply, state)
+            }
+        };
+        (:link_up, _info: string) -> {
+            _: boolean <- conn_credit(state.conn);
+            (:no_reply, state)
+        };
+        (:rx, segment: string) -> case state.sess.s.phase == 2 or is_idle(state.conn) of {
+            true -> (:no_reply, state);
+            false -> {
+                n: $SESSION_STATE$ <- on_segment(segment, state);
+                case n.seen < 0 of {
+                    true -> {
+                        sequence proc[concurrency]
+                            _: atom <- fail_self(:trial_fault)
+                        produces
+                            pure (:no_reply, state)
+                        end
+                    };
+                    false -> (:no_reply, n)
+                }
+            }
+        };
+        (:store, token: int64, kind: atom, text: string, num: int64) -> case token == state.token and not is_idle(state.conn) and state.sess.s.phase != 2 of {
+            true -> (:no_reply, on_store(kind, text, num, state));
+            false -> {
+                // An answer for a connection that is gone: a lease nobody will use is given back.
+                _: boolean <- case kind == :leased and ts_pool@region_of(text) >= 0 of {
+                    true -> to_store_drop(ts_pool@region_of(text), state.slot, "the connection that asked for the region is gone");
+                    false -> true
+                };
+                (:no_reply, state)
+            }
+        };
+        (:rebuild, token: int64, schema: int64, record: string) -> case token == state.token and state.sess.s.phase == 3 of {
+            false -> (:no_reply, state);
+            true -> {
+                after: $SESSION_STATE$ <- rebuilt(schema, record, state);
+                _: boolean <- ask_more(ts_pool@region_of(state.id), state.slot);
+                (:no_reply, after)
+            }
+        };
+        (:tx_credit, _n: int64) -> (:no_reply, state);
+        (:tx_failed, why: atom) -> {
+            _: atom <- ts_out@complain(concat("to-silica: a reply was not sent: ", atom_name(why)));
+            (:no_reply, state)
+        };
+        (:link_down, _why: atom) -> {
+            phase: int64 <- state.sess.s.phase;
+            _: boolean <- case (phase == 3 or phase == 4 or phase == 5) and ts_pool@region_of(state.id) >= 0 of {
+                true -> to_store_detach(ts_pool@region_of(state.id), state.slot);
+                false -> true
+            };
+            (:no_reply, { conn: no_conns(), slot: state.slot, token: state.token, rx: state.rx, id: "", sess: ts_session@fresh(), seen: state.seen })
+        }
+    }
+}
+
+fn flags(count: int64) -> $FLAGS$ {
+    { strategy: :one_for_one, allowed_restart_count: count, restarts_time_frame: 10 }
+}
+
+// The pool of session actors: one_for_one, at most 8 restarts in 10 seconds.
+fn init(initial_state: int64) -> $SESSION_SUP$ {
+    sequence proc[mem(normal)]
+        f: $FLAGS$ <- flags(8);
+        children: $SESSION_SPECS$ <- [
+$SESSION_CHILDREN$
+        ]
+    produces
+        pure (f, children)
+    end
+}
+
+// What the root supervisor names as this supervisor's behaviour (a child supervisor of another unit must be a
+// unit's own Supervisor implementation).
+fn session_sup(initial_state: int64) -> $SESSION_SUP$ {
+    init(initial_state)
+}

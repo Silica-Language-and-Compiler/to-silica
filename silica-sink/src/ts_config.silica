@@ -1,0 +1,61 @@
+// ts_config: the transpiler's configuration unit (app design 3.1). Changing a value is a rebuild.
+module ts_config;
+
+export listen_address/0;
+export transpiler_name/0;
+export credit_window/0;
+export max_frame/0;
+export debug_output/0;
+export transpile_attempts/0;
+export fault_session/0;
+export fault_transpile_once/0;
+export fault_transpile_always/0;
+
+// "listen:<port>" binds 127.0.0.1 only (contract T3.1; transport design 6.3). Provisional default port 7411.
+fn listen_address() -> string {
+    "listen:7411"
+}
+
+// The `transpiler` field of (:welcome, ...) (contract R1).
+fn transpiler_name() -> string {
+    "to-silica 0.2.0 (check mode; transpile with supervised actors, a pool of store regions, resume; minimal printer)"
+}
+
+// The fixed credit window of a check session (app design 3.2; provisional 64). Must be even.
+fn credit_window() -> int64 {
+    64
+}
+
+// The largest frame the transpiler grants (contract T4.3): the max_bytes of the schema unit's decode.
+fn max_frame() -> int64 {
+    1048576
+}
+
+// DEBUG. true: the transpile worker also prints every output file it stores to standard output, between marker
+// lines, so that a (:memory) store's output can be seen and exported (tools/export_debug_output.py). The stored
+// records are the real output (app design 6.5); this is only a window onto them until the (:backing) store and
+// its exporter exist (P2).
+fn debug_output() -> boolean {
+    true
+}
+
+// How many times a session's transpiling is tried when its transpile actor fails (app design 3.4).
+fn transpile_attempts() -> int64 {
+    3
+}
+
+// TRIAL HOOKS. Empty in a normal build. silica-sink/build.sh with TS_TRIAL_FAULTS=1 sets them, so that the trials
+// can make an actor fail on demand: a (:unit_begin) whose unit_name is fault_session() ends the session actor that
+// receives it; one named fault_transpile_once() ends the transpile actor on a session's first attempt only, one
+// named fault_transpile_always() on every attempt.
+fn fault_session() -> string {
+    ""
+}
+
+fn fault_transpile_once() -> string {
+    ""
+}
+
+fn fault_transpile_always() -> string {
+    ""
+}

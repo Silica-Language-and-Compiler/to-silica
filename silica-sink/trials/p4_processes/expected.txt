@@ -1,0 +1,16 @@
+step 1: received {said, N}, N = 6
+step 1: received {said, N}, N = 0
+step 2: the process ended with 42
+step 3: the process ended with late
+step 4: the process ended with 42
+step 5: received {said, N}, N = 8
+step 5: the process ended with done
+step 6: processes run one after the other = 10
+step 7: notify(E) = stop
+step 8: kill(W) = ok
+step 9: spare(V) = ok
+step 9: the process ended with late
+step 11: the process ended with 42
+say: n = 7
+step 12: received {said, N}, N = 6
+step 14: received {said, N}, N = 9

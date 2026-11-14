@@ -1,0 +1,391 @@
+// ts_session: one session of the contract as a pure step function (app design 3.2). step takes the session's
+// state and the digest of one frame (ts_intake) and answers the new state, the bytes to send back (already framed,
+// possibly several frames, possibly none), what to store, and whether the session is over. The session actor
+// (dangerous_ts_session) only moves bytes and talks to the store owner.
+//
+// Source file: ts_session.silica.in; the $NAME$ placeholders are spelled out by silica-sink/tools/expand.py.
+//
+// Built: the hello (R1, R2); check mode (contract 6.5); transpile mode's session side: sequence (T5.1), duplicates
+// below a resume point (T5.1), credit (T6.2), unit order (T5.3), unit names (T5.2), the form checks of ts_check,
+// the counts of (:unit_end) and (:end) (T5.3b, diagnostic T1002), rejections (R5), the check result (T6.11),
+// abort (M6), and the rebuilding of a session's state from its stored records on a resume (T6.5).
+//
+// In transpile mode credit follows storage (contract T6.3): when half the window is used the step asks for a
+// mark (step.mark), the session actor has the store owner make everything durable, and only the owner's answer
+// brings (:stored, n) and (:credit, half) (stored below).
+module ts_session;
+
+use ts_text;
+use ts_config;
+use ts_reply;
+use ts_records;
+
+export fresh/0;
+export step/3;
+export leased/3;
+export ended/3;
+export stored/2;
+export replayed/2;
+export replayed_rejection/2;
+export with_phase/2;
+export release_name/1;
+export framing_failed/2;
+export miscounts/1;
+
+// s.phase: 0 waiting for the hello; 1 open, check mode; 2 over; 3 a transpile hello, waiting for the store's
+// lease; 4 open, transpile mode; 5 the end is stored, waiting for the transpile result; 6 a release, waiting for
+// the store; 7 a resuming hello, waiting for the store to replay the session.
+// s.floor: the resume point; a frame with a seq below it is a duplicate and is dropped (T5.1).
+// q.open is "" when no unit is open, otherwise "=" and the unit's name; q.names is every silica_unit seen, each
+// between commas; q.forms counts the open unit's form frames that used a seq, q.blind the frames the decoder
+// refused while it was open (they may have been forms).
+fn fresh() -> $SESS$ {
+    { s: { phase: 0, silica: false, prefix: "", max_frame: ts_config@max_frame(), miscounts: 0, floor: 0 },
+      q: { next: 0, credit: 0, open: "", names: ",", forms: 0, blind: 0, marked: false },
+      n: { units: 0, gaps: 0, rejected: 0 } }
+}
+
+// ------------------------------------------------------------------ helpers
+
+fn go(sess: $SESS$, out: string) -> $STEP$ {
+    { sess: sess, out: out, done: false, keep: "", own: "", mark: false }
+}
+
+fn stop(sess: $SESS$, out: string) -> $STEP$ {
+    { sess: sess, out: out, done: true, keep: "", own: "", mark: false }
+}
+
+// The session with another phase (see fresh).
+fn with_phase(sess: $SESS$, phase: int64) -> $SESS$ {
+    { s: { phase: phase, silica: sess.s.silica, prefix: sess.s.prefix, max_frame: sess.s.max_frame, miscounts: sess.s.miscounts, floor: sess.s.floor }, q: sess.q, n: sess.n }
+}
+
+fn with_q(sess: $SESS$, next: int64, credit: int64) -> $SESS$ {
+    { s: sess.s, q: { next: next, credit: credit, open: sess.q.open, names: sess.q.names, forms: sess.q.forms, blind: sess.q.blind, marked: sess.q.marked }, n: sess.n }
+}
+
+fn with_mark(sess: $SESS$, marked: boolean) -> $SESS$ {
+    { s: sess.s, q: { next: sess.q.next, credit: sess.q.credit, open: sess.q.open, names: sess.q.names, forms: sess.q.forms, blind: sess.q.blind, marked: marked }, n: sess.n }
+}
+
+fn bad(sess: $SESS$, reason: atom, where: string) -> $VERDICT$ {
+    { reason: reason, where: where, fin: false, sess: sess, note: "" }
+}
+
+fn good(sess: $SESS$, fin: boolean) -> $VERDICT$ {
+    { reason: :ok, where: "", fin: fin, sess: sess, note: "" }
+}
+
+// Accepted, with a T1002 finding about its count (contract T5.3b).
+fn miscounted(sess: $SESS$, fin: boolean, note: string) -> $VERDICT$ {
+    { reason: :ok, where: "", fin: fin,
+      sess: { s: { phase: sess.s.phase, silica: sess.s.silica, prefix: sess.s.prefix, max_frame: sess.s.max_frame, miscounts: sess.s.miscounts + 1, floor: sess.s.floor }, q: sess.q, n: sess.n },
+      note: note }
+}
+
+fn one_more_rejected(sess: $SESS$) -> $SESS$ {
+    { s: sess.s, q: sess.q, n: { units: sess.n.units, gaps: sess.n.gaps, rejected: sess.n.rejected + 1 } }
+}
+
+fn one_more_form(sess: $SESS$) -> $SESS$ {
+    { s: sess.s, q: { next: sess.q.next, credit: sess.q.credit, open: sess.q.open, names: sess.q.names, forms: sess.q.forms + 1, blind: sess.q.blind, marked: sess.q.marked }, n: sess.n }
+}
+
+fn one_more_blind(sess: $SESS$) -> $SESS$ {
+    { s: sess.s, q: { next: sess.q.next, credit: sess.q.credit, open: sess.q.open, names: sess.q.names, forms: sess.q.forms, blind: sess.q.blind + 1, marked: sess.q.marked }, n: sess.n }
+}
+
+fn miscounts(sess: $SESS$) -> int64 {
+    sess.s.miscounts
+}
+
+// ------------------------------------------------------------------ the hello (M1) and a first frame that is not one
+
+fn hello_detail(why: atom) -> string {
+    case why of {
+        :contract -> "this transpiler serves contract version 1 (T10.1)";
+        :choices -> "a :bees session needs exactly one choice for each of the eleven requirements; a :silica session exactly a3_4 and a6_8 (T7.1)";
+        _: atom -> "max_frame below 1, a check-mode hello with a session id (T6.12), or :advisory in a :silica session (T8.4)"
+    }
+}
+
+fn granted_frame(asked: int64) -> int64 {
+    limit: int64 <- ts_config@max_frame();
+    case asked > limit of {
+        true -> limit;
+        false -> asked
+    }
+}
+
+// Opens the session in phase 1 (check) or 4 (transpile, once the store owner has leased it a region or replayed
+// it): the welcome (R1). resume_from is the next seq expected: 0 for a new session.
+fn leased(id: string, sess: $SESS$, phase: int64) -> $STEP$ {
+    window: int64 <- ts_config@credit_window();
+    go({ s: { phase: phase, silica: sess.s.silica, prefix: sess.s.prefix, max_frame: sess.s.max_frame, miscounts: sess.s.miscounts, floor: sess.q.next },
+         q: { next: sess.q.next, credit: window, open: sess.q.open, names: sess.q.names, forms: sess.q.forms, blind: sess.q.blind, marked: false },
+         n: sess.n },
+       ts_reply@welcome_frame(id, sess.q.next, window, sess.s.max_frame))
+}
+
+// A resumed session whose (:end) is already stored: the welcome says there is nothing left to send (resume_from
+// is the number of frames stored, no credit), and the session waits for the result (phase 5).
+fn ended(id: string, sess: $SESS$, frames: int64) -> $STEP$ {
+    go(with_phase(sess, 5), ts_reply@welcome_frame(id, frames, 0, sess.s.max_frame))
+}
+
+// g is the hello's digest: seq its max_frame, name its prefix, text its session. A check session opens at once; a
+// transpile session waits in phase 3 for the store owner, and the step's keep is the hello to store or compare.
+fn hello(id: string, sess: $SESS$, g: $DIGEST$) -> $STEP$ {
+    why: atom <- g.check.reason;
+    opened: $SESS$ <- { s: { phase: 0, silica: g.flags.silica, prefix: ts_text@fresh(g.name), max_frame: granted_frame(g.seq), miscounts: 0, floor: 0 }, q: sess.q, n: sess.n };
+    case why == :ok of {
+        false -> stop(sess, ts_reply@refused_frame(why, hello_detail(why)));
+        true -> case g.flags.check_mode of {
+            false -> { sess: with_phase(opened, 3), out: "", done: false, keep: g.keep, own: "", mark: false };
+            true -> leased(id, opened, 1)
+        }
+    }
+}
+
+fn first(id: string, sess: $SESS$, g: $DIGEST$) -> $STEP$ {
+    case g.kind of {
+        :rejected -> stop(sess, ts_reply@refused_frame(:bad_hello, atom_name(g.check.reason)));
+        :hello -> hello(id, sess, g);
+        :release -> go({ s: { phase: 6, silica: false, prefix: ts_text@fresh(g.name), max_frame: sess.s.max_frame, miscounts: 0, floor: 0 }, q: sess.q, n: sess.n }, "");
+        _: atom -> stop(sess, ts_reply@refused_frame(:bad_hello, "the first frame of a connection must be a hello or a release (M1, M7)"))
+    }
+}
+
+// ------------------------------------------------------------------ M2..M5
+
+fn unit_begin(sess: $SESS$, g: $DIGEST$) -> $VERDICT$ {
+    case length_bytes(sess.q.open) > 0 of {
+        true -> bad(sess, :unit_order, ".unit_name");
+        false -> {
+            key: string <- ts_text@concat3(",", g.text, ",");
+            case ts_text@is_identifier(g.text) and starts_with(g.text, sess.s.prefix) and not contains(sess.q.names, key) of {
+                false -> bad(sess, :bad_unit_name, ".silica_unit");
+                true -> good({ s: sess.s,
+                               q: { next: sess.q.next, credit: sess.q.credit, open: concat("=", ts_text@fresh(g.name)), names: ts_text@concat3(sess.q.names, ts_text@fresh(g.text), ","), forms: 0, blind: 0, marked: sess.q.marked },
+                               n: { units: sess.n.units + 1, gaps: sess.n.gaps, rejected: sess.n.rejected } }, false)
+            }
+        }
+    }
+}
+
+// A form of the open unit counts toward the unit's forms whether it is accepted or rejected (T5.3b).
+fn form(sess: $SESS$, g: $DIGEST$) -> $VERDICT$ {
+    case sess.q.open == concat("=", g.name) of {
+        false -> bad(sess, :unit_order, ".unit_name");
+        true -> {
+            counted: $SESS$ <- one_more_form(sess);
+            case g.check.reason == :ok of {
+                false -> bad(counted, g.check.reason, g.check.where);
+                true -> good({ s: counted.s, q: counted.q, n: { units: sess.n.units, gaps: sess.n.gaps + g.check.gaps, rejected: sess.n.rejected } }, false)
+            }
+        }
+    }
+}
+
+fn count_note(what: string, said: int64, seen: int64) -> string {
+    concat(ts_text@concat4(what, " says ", ts_text@itoa(said), ", the transpiler counted "), ts_text@itoa(seen))
+}
+
+fn unit_end(sess: $SESS$, g: $DIGEST$) -> $VERDICT$ {
+    case sess.q.open == concat("=", g.name) of {
+        false -> bad(sess, :unit_order, ".unit_name");
+        true -> {
+            closed: $SESS$ <- { s: sess.s, q: { next: sess.q.next, credit: sess.q.credit, open: "", names: sess.q.names, forms: 0, blind: 0, marked: sess.q.marked }, n: sess.n };
+            case g.count >= sess.q.forms and g.count <= sess.q.forms + sess.q.blind of {
+                true -> good(closed, false);
+                false -> miscounted(closed, false, count_note("unit_end.forms", g.count, sess.q.forms))
+            }
+        }
+    }
+}
+
+fn session_end(sess: $SESS$, g: $DIGEST$) -> $VERDICT$ {
+    case length_bytes(sess.q.open) > 0 of {
+        true -> bad(sess, :unit_order, "");
+        false -> case g.count == sess.n.units of {
+            true -> good(sess, true);
+            false -> miscounted(sess, true, count_note("end.units", g.count, sess.n.units))
+        }
+    }
+}
+
+fn judged(sess: $SESS$, g: $DIGEST$) -> $VERDICT$ {
+    case g.kind of {
+        :unit_begin -> unit_begin(sess, g);
+        :form -> form(sess, g);
+        :unit_end -> unit_end(sess, g);
+        :end -> session_end(sess, g);
+        _: atom -> bad(sess, :bad_variant, "")
+    }
+}
+
+fn judge(sess: $SESS$, g: $DIGEST$) -> $VERDICT$ {
+    case g.seq == sess.q.next of {
+        false -> bad(sess, :seq_gap, ".seq");
+        true -> judged(sess, g)
+    }
+}
+
+fn status_of(sess: $SESS$) -> atom {
+    case sess.n.rejected == 0 and sess.s.miscounts == 0 of {
+        true -> :ok;
+        false -> :failed
+    }
+}
+
+fn finding(seq: int64, unit_name: string, note: string) -> string {
+    case length_bytes(note) == 0 of {
+        true -> "";
+        false -> ts_reply@finding_frame(seq, unit_name, :error, "T1002", note)
+    }
+}
+
+fn own_rejection(storing: boolean, seq: int64, reason: atom, where: string) -> string {
+    case storing of {
+        true -> ts_records@rejected_etf(seq, reason, where);
+        false -> ""
+    }
+}
+
+// Applies a verdict to a session that held credit for the frame. A rejected frame uses its seq (R5), except a
+// :seq_gap, which uses none (the sender's next frame is still expected at q.next). Credit: the frame consumed one.
+// When half the window is used: a check session is granted half a window at once (T6.11a); a transpile session
+// is granted it when the store owner has made the frames durable (step.mark, then stored below).
+fn settle(id: string, sess: $SESS$, g: $DIGEST$, v: $VERDICT$) -> $STEP$ {
+    storing: boolean <- sess.s.phase == 4;
+    half: int64 <- ts_config@credit_window() / 2;
+    left: int64 <- sess.q.credit - 1;
+    refill: boolean <- left <= half and not sess.q.marked;
+    mark: boolean <- refill and storing;
+    credit: int64 <- case refill and not storing of {
+        true -> left + half;
+        false -> left
+    };
+    grant: string <- case refill and not storing of {
+        true -> ts_reply@credit_frame(half);
+        false -> ""
+    };
+    case v.reason == :ok of {
+        true -> {
+            s2: $SESS$ <- with_mark(with_q(v.sess, v.sess.q.next + 1, credit), sess.q.marked or mark);
+            note: string <- finding(sess.q.next, g.name, v.note);
+            case storing of {
+                true -> case v.fin of {
+                    false -> { sess: s2, out: note, done: false, keep: g.keep, own: "", mark: mark };
+                    true -> { sess: with_phase(s2, 5), out: note, done: false, keep: g.keep, own: "", mark: false }
+                };
+                false -> case v.fin of {
+                    false -> go(s2, concat(note, grant));
+                    true -> stop(s2, concat(note, ts_reply@result_frame(status_of(s2), s2.n, id, 0)))
+                }
+            }
+        };
+        false -> {
+            gap: boolean <- v.reason == :seq_gap;
+            next: int64 <- case gap of {
+                true -> sess.q.next;
+                false -> sess.q.next + 1
+            };
+            shown: int64 <- case gap of {
+                true -> g.seq;
+                false -> sess.q.next
+            };
+            { sess: one_more_rejected(with_mark(with_q(v.sess, next, credit), sess.q.marked or mark)),
+              out: concat(ts_reply@rejected_frame(shown, v.reason, v.where), grant),
+              done: false, keep: "", own: own_rejection(storing, shown, v.reason, v.where), mark: mark }
+        }
+    }
+}
+
+// A frame that needs credit (T6.2). Without credit it is rejected :no_credit and its seq is not used.
+fn charged(id: string, sess: $SESS$, g: $DIGEST$, v: $VERDICT$) -> $STEP$ {
+    case sess.q.credit < 1 of {
+        true -> { sess: one_more_rejected(sess), out: ts_reply@rejected_frame(g.seq, :no_credit, ""), done: false, keep: "",
+                  own: own_rejection(sess.s.phase == 4, g.seq, :no_credit, ""), mark: false };
+        false -> settle(id, sess, g, v)
+    }
+}
+
+fn misplaced(sess: $SESS$) -> $STEP$ {
+    { sess: one_more_rejected(sess), out: ts_reply@rejected_frame(0 - 1, :bad_variant, ""), done: false, keep: "",
+      own: own_rejection(sess.s.phase == 4, 0 - 1, :bad_variant, ""), mark: false }
+}
+
+fn open_frame(id: string, sess: $SESS$, g: $DIGEST$) -> $STEP$ {
+    case g.kind of {
+        :rejected -> charged(id, sess, g, bad(one_more_blind(sess), g.check.reason, ""));
+        :abort -> stop(sess, "");
+        :hello -> misplaced(sess);
+        :release -> misplaced(sess);
+        _: atom -> case g.seq >= 0 and g.seq < sess.s.floor of {
+            true -> go(sess, "");
+            false -> charged(id, sess, g, judge(sess, g))
+        }
+    }
+}
+
+// One frame in, as ts_intake@digest reduced it. id is the session's id (a check session's, or "" before the store
+// owner has named a transpile session).
+fn step(id: string, sess: $SESS$, g: $DIGEST$) -> $STEP$ {
+    case sess.s.phase == 0 of {
+        true -> first(id, sess, g);
+        false -> open_frame(id, sess, g)
+    }
+}
+
+// The store owner's answer to a mark: every frame below seq is durable (contract T6.4). An open session is then
+// granted the half window it was waiting for (T6.3); a session whose (:end) is stored gets the last (:stored).
+fn stored(sess: $SESS$, seq: int64) -> $STEP$ {
+    half: int64 <- ts_config@credit_window() / 2;
+    case sess.s.phase == 4 of {
+        true -> go(with_mark(with_q(sess, sess.q.next, sess.q.credit + half), false), concat(ts_reply@stored_frame(seq), ts_reply@credit_frame(half)));
+        false -> go(sess, ts_reply@stored_frame(seq))
+    }
+}
+
+// ------------------------------------------------------------------ rebuilding a session from its region (T6.5)
+
+// One stored frame of the session being resumed, as ts_intake digested it again (mode :check). The frame was
+// accepted when it was stored, so it is judged without seq or credit and its effect on the session is repeated.
+fn replayed(sess: $SESS$, g: $DIGEST$) -> $SESS$ {
+    case g.kind == :unit_begin or g.kind == :form or g.kind == :unit_end or g.kind == :end of {
+        false -> sess;
+        true -> {
+            v: $VERDICT$ <- judged(sess, g);
+            case v.reason == :ok of {
+                true -> with_q(v.sess, sess.q.next + 1, sess.q.credit);
+                false -> sess
+            }
+        }
+    }
+}
+
+// One stored rejection of the session being resumed (ts_records@summary: used says whether the frame used a seq).
+// What a rejected form or an undecodable frame did to the open unit's counts is not stored, so a unit open across
+// a resume is given the benefit of the doubt (one more possible form).
+fn replayed_rejection(sess: $SESS$, used: boolean) -> $SESS$ {
+    counted: $SESS$ <- one_more_rejected(one_more_blind(sess));
+    case used of {
+        true -> with_q(counted, sess.q.next + 1, sess.q.credit);
+        false -> counted
+    }
+}
+
+// In phase 6 (a release, M7) the session's prefix field holds the name of the session to release.
+fn release_name(sess: $SESS$) -> string {
+    sess.s.prefix
+}
+
+// The answer when the byte stream itself cannot be framed (a length above max_frame, T4.3): the stream cannot be
+// followed any further, so the session actor sends this and closes.
+fn framing_failed(sess: $SESS$, why: atom) -> string {
+    case sess.s.phase == 0 of {
+        true -> ts_reply@refused_frame(:bad_hello, atom_name(why));
+        false -> ts_reply@rejected_frame(sess.q.next, why, "")
+    }
+}

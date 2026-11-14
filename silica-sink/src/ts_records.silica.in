@@ -1,0 +1,160 @@
+// ts_records: the transpiler's own records in a store region (app design 4.1), beside the contract frames it
+// stores. Each is one ETF value; the store owner wraps it with wireframe@record((:etf), own_schema(), ...), while a
+// stored contract frame carries frame_schema(), so a replay tells the two apart without decoding twice.
+//
+//   (:session, { id, started_at })          the first record of a session; the accepted hello follows as a frame
+//   (:rejected_frame, { seq, reason, where })   a frame the session actor rejected (contract R5)
+//   (:ended, { rejected, frames, miscounts })   the session's (:end) is stored: what the session actor counted
+//   (:aborted, { reason })                  an (:abort) (contract M6)
+//   (:output_begin, { attempt })            a transpile attempt starts
+//   (:output_file, { path, content })       one output file
+//   (:transpiled, { result })               the output is complete; the result as sent (contract R8)
+//   (:released, { id })                     the session was released (contract M7); the region is trimmed after it
+//
+// Everything replayed is decoded again before use (app design 7): summary is the only way a stored own record
+// becomes a value.
+//
+// Source file: ts_records.silica.in.
+module ts_records;
+
+use wire_etf;
+use wireframe;
+use ts_config;
+use ts_reply;
+
+export frame_schema/0;
+export own_schema/0;
+export session_etf/1;
+export rejected_etf/3;
+export ended_etf/3;
+export aborted_etf/1;
+export output_begin_etf/1;
+export output_file_etf/2;
+export transpiled_etf/4;
+export released_etf/1;
+export summary/1;
+export uses_seq/2;
+
+// The schema number of a stored contract frame: the contract's version.
+fn frame_schema() -> int64 {
+    1
+}
+
+// The schema number of the transpiler's own records, version 1.
+fn own_schema() -> int64 {
+    101
+}
+
+fn session_etf(id: string) -> string {
+    sequence proc[mem(normal), transport]
+        zero: int64 <- 0;
+        e: string <- encode((:etf), (:session, { id: id, started_at: zero }))
+    produces
+        pure e
+    end
+}
+
+fn rejected_etf(seq: int64, reason: atom, where: string) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:rejected_frame, { seq: seq, reason: reason, where: where }))
+    produces
+        pure e
+    end
+}
+
+fn ended_etf(rejected: int64, frames: int64, miscounts: int64) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:ended, { rejected: rejected, frames: frames, miscounts: miscounts }))
+    produces
+        pure e
+    end
+}
+
+fn aborted_etf(reason: string) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:aborted, { reason: reason }))
+    produces
+        pure e
+    end
+}
+
+fn output_begin_etf(attempt: int64) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:output_begin, { attempt: attempt }))
+    produces
+        pure e
+    end
+}
+
+fn output_file_etf(path: string, content: string) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:output_file, { path: path, content: content }))
+    produces
+        pure e
+    end
+}
+
+fn transpiled_etf(status: atom, n: $COUNTS$, id: string, files: int64) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:transpiled, { result: { status: status, counts: n, session: id, files: files } }))
+    produces
+        pure e
+    end
+}
+
+fn released_etf(id: string) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:released, { id: id }))
+    produces
+        pure e
+    end
+}
+
+// True when a rejected frame used its seq (contract T5.1a): every rejection but :seq_gap and :no_credit, and but
+// a hello or release inside a session (seq -1, T5.3a).
+fn uses_seq(seq: int64, reason: atom) -> boolean {
+    seq >= 0 and reason != :seq_gap and reason != :no_credit
+}
+
+fn flag(b: boolean) -> int64 {
+    case b of {
+        true -> 1;
+        false -> 0
+    }
+}
+
+fn unknown(why: atom) -> $OWNSUM$ {
+    { kind: :unreadable, text: atom_name(why), a: 0, b: 0, c: 0 }
+}
+
+fn decoded(etf: string) -> (:ok, $OWN$) | (:rejected, atom) {
+    sequence proc[mem(normal), transport]
+        r: (:ok, $OWN$) | (:rejected, atom) <- decode((:etf), etf, { max_bytes: 16777216, max_depth: 8, max_length: 65536 })
+    produces
+        pure r
+    end
+}
+
+// What a stored own record says, as a small summary: kind is the record's tag, or :unreadable.
+//   :session         text the id
+//   :rejected_frame  a the seq, b 1 when the frame used its seq
+//   :ended           a rejected, b frames, c miscounts
+//   :output_begin    a the attempt
+//   :output_file     text the path
+//   :transpiled      text the result frame as it is sent (contract R8), a 1
+//   :released, :aborted
+fn summary(etf: string) -> $OWNSUM$ {
+    case decoded(etf) of {
+        (:rejected, why: atom) -> unknown(why);
+        (:ok, v: $OWN$) -> case v of {
+            (:session, s: { id: string, started_at: int64 }) -> { kind: :session, text: s.id, a: 0, b: 0, c: 0 };
+            (:rejected_frame, j: $REJECTED$) -> { kind: :rejected_frame, text: "", a: j.seq, b: flag(uses_seq(j.seq, j.reason)), c: 0 };
+            (:ended, e: { rejected: int64, frames: int64, miscounts: int64 }) -> { kind: :ended, text: "", a: e.rejected, b: e.frames, c: e.miscounts };
+            (:aborted, _a: { reason: string }) -> { kind: :aborted, text: "", a: 0, b: 0, c: 0 };
+            (:output_begin, o: { attempt: int64 }) -> { kind: :output_begin, text: "", a: o.attempt, b: 0, c: 0 };
+            (:output_file, f: { path: string, content: string }) -> { kind: :output_file, text: f.path, a: 0, b: 0, c: 0 };
+            (:transpiled, t: { result: $RESULT$ }) -> { kind: :transpiled, text: ts_reply@result_frame(t.result.status, t.result.counts, t.result.session, t.result.files), a: 1, b: 0, c: 0 };
+            (:released, _r: { id: string }) -> { kind: :released, text: "", a: 0, b: 0, c: 0 }
+        }
+    }
+}

@@ -1,0 +1,483 @@
+// tcp_transport_v1: the normative schema of every frame of the to-silica TCP transport contract, version 1.
+//
+// READ THIS FIRST (written for LLMs and tools):
+// - This unit is the single source of truth for the SHAPE of every frame. tcp-transport-v1.md is the source of truth
+//   for BEHAVIOUR (ordering, credit, durability, validation rules). If the two disagree on a shape, this unit wins.
+// - It is a real Silica unit. Its two functions are the transpiler's decoders: Silica's derived decode((:etf), ...)
+//   builds and validates exactly the type written in each signature. Silica has no type aliases, so every type is
+//   spelled out inline; the comments name the messages (M1..M6, R1..R8) and the node groups of the contract.
+// - How a Silica type appears in ETF (Silica transport design section 4.7):
+//     :name            an ETF atom (only the atoms written here; identifiers are strings, rule T4.4)
+//     string           BINARY_EXT (bytes; UTF-8 where the contract says text)
+//     int64            an ETF integer in the signed 64-bit range
+//     boolean          the atoms true and false
+//     (:tag, A, B)     an ETF tuple whose first element is the atom tag
+//     (A, B)           an ETF tuple
+//     { k: A, ... }    MAP_EXT with exactly these atom keys, each present once, no others
+//     List[A, ...]     a proper ETF list
+//     A | B            either; alternatives are told apart by tag, arity or kind
+// - There is no variant without fields: a one-atom tuple is not a Silica run-time value, and a bare atom among the
+//   entries of a list whose other entries are tuples holding lists makes Silica's derived decoder fault (measured
+//   2026-11-12). So the types without fields are one variant, (:t_basic, kind).
+// - Records have at most 4 fields and tuples at most 8 elements: larger ones do not compile in Silica's derived
+//   decoder today (measured 2026-11-12 on the Apple Silicon compiler). That is why some records nest.
+// - Every int64 that names a list position is an index into a list of the same form; -1 means absent. In a node
+//   tuple the second element is the location index. Child indices are lower than their parent's (rule T9.2).
+// - Each frame on the wire is <<Length:32/big, Etf/binary>>, Etf = term_to_binary(Term) with no options (rule T4.1).
+//
+// Status: draft, 2026-11-12. Compiles with ../silica/binaries/silica-999919-macos-applesilicon in about 190 s (see tools/README.md).
+
+module tcp_transport_v1;
+
+use wire_etf;
+
+export decode_to_transpiler/1;
+export decode_to_sender/1;
+export check_to_transpiler/1;
+export check_to_sender/1;
+
+// Every frame a sender or driver sends (M1..M7). The transpiler's session actor decodes with this; anything else is
+// (:rejected, reason), the reason being one of Silica's decode rejection atoms (contract T5.5).
+fn decode_to_transpiler(frame: string) -> (:ok,
+        // M1
+        (:hello, { contract: int64, session: string,
+                   sender: { language: string, prefix: string, codex: string, codex_version: string },
+                   options: { profile: :bees | :silica,
+                              choices: List[{ requirement: :a3_2 | :a3_3 | :a3_4 | :a4_2 | :a4_3 | :a4_4 | :a5_1 | :a5_4 | :a5_5 | :a6_8 | :a7_1, choice: :lowered | :default | :phase_field | :continuation_table | :back_edge | :budget_counter | :none | :single_pool | :pool_tree | :one_per_shape | :uniform_shape | :chosen | :result_values | :result_variants | :mixed | :rejected | :proxy | :liveness_check | :accept_sender_death | :silica_link | :supervisor_request | :not_supported | :lookup_tables | :module_table | :own_dispatch | :other | :not_applicable, params: List[(string, string), mem(normal)], note: string }, mem(normal)],
+                              hints: { proven: :trust | :check | :advisory, declared: :trust | :check | :advisory, inferred: :trust | :check | :advisory },
+                              run: { mode: :transpile | :check, max_frame: int64 } } }) |
+        // M2
+        (:unit_begin, { seq: int64, unit_name: string, silica_unit: string, source: string }) |
+        // M3
+        (:form, { seq: int64, unit_name: string, body:
+            (:function, {
+                head: { name: string, arity: int64, exported: boolean, file: string },
+                code: { locations: List[(int64, int64), mem(normal)],
+                        nodes: List[
+                            // literals and data
+                            (:int, int64, int64) |
+                            (:float, int64, string) |
+                            (:text, int64, string) |
+                            (:bytes, int64, string) |
+                            (:symbol, int64, string) |
+                            (:boolean, int64, boolean) |
+                            (:nil, int64) |
+                            (:tuple, int64, List[int64, mem(normal)]) |
+                            (:cons, int64, int64, int64) |
+                            (:list, int64, List[int64, mem(normal)], int64) |
+                            (:map, int64, List[(int64, int64), mem(normal)], int64) |
+                            (:record, int64, string, List[(string, int64), mem(normal)], int64) |
+                            (:field, int64, int64, string) |
+                            (:bits, int64, List[int64, mem(normal)]) |
+                            (:segment, int64, int64, int64, int64, :integer | :float | :binary | :utf8, boolean, :big | :little) |
+                            // names, matching, control
+                            (:var, int64, string) |
+                            (:wild, int64) |
+                            (:match, int64, int64, int64) |
+                            (:block, int64, List[int64, mem(normal)]) |
+                            (:case, int64, int64, List[int64, mem(normal)]) |
+                            (:clause, int64, List[int64, mem(normal)], int64, int64) |
+                            (:cond, int64, List[int64, mem(normal)]) |
+                            (:op, int64, string, List[int64, mem(normal)]) |
+                            (:call, int64, string, string, List[int64, mem(normal)]) |
+                            (:apply, int64, int64, List[int64, mem(normal)]) |
+                            (:apply_mfa, int64, int64, int64, List[int64, mem(normal)]) |
+                            (:fun_ref, int64, string, string, int64) |
+                            (:lambda, int64, List[int64, mem(normal)]) |
+                            (:loop_hint, int64, int64) |
+                            // processes, messages, failure
+                            (:self, int64) |
+                            (:spawn, int64, int64, List[int64, mem(normal)], boolean) |
+                            (:send, int64, int64, int64) |
+                            (:receive, int64, List[int64, mem(normal)], int64, int64) |
+                            (:link, int64, int64) |
+                            (:exit_signal, int64, int64, int64) |
+                            (:fail, int64, int64) |
+                            (:try, int64, int64, List[int64, mem(normal)], List[int64, mem(normal)], int64) |
+                            (:register, int64, string, int64) |
+                            (:send_named, int64, string, int64) |
+                            // gaps
+                            (:gap_node, int64, string, string) |
+                            // low-level
+                            (:sl_call, int64, string, string, List[int64, mem(normal)]) |
+                            (:sl_cast, int64, int64, int64) |
+                            (:sl_spawn_child, int64, int64, string, string, int64, { reserve: int64, release: string, state_policy: string }) |
+                            (:sl_fail_self, int64, int64) |
+                            (:sl_stop_self, int64) |
+                            (:sl_phase, int64, int64, List[int64, mem(normal)], string) |
+                            (:sl_yield, int64, string, List[int64, mem(normal)]) |
+                            (:sl_behaviour, int64, int64, int64, int64)
+                        , mem(normal)],
+                        clauses: List[int64, mem(normal)] },
+                types: List[
+                    (:t_int, :i8 | :i16 | :i32 | :i64 | :u8 | :u16 | :u32 | :u64) |
+                    (:t_float, :f32 | :f64) |
+                    (:t_basic, :boolean | :char | :text | :bytes | :symbol | :dynamic) |
+                    (:t_symbols, List[string, mem(normal)]) |
+                    (:t_tuple, List[int64, mem(normal)]) |
+                    (:t_tagged, string, List[int64, mem(normal)]) |
+                    (:t_record, List[(string, int64), mem(normal)]) |
+                    (:t_list, int64) |
+                    (:t_union, List[int64, mem(normal)]) |
+                    (:t_fun, List[int64, mem(normal)], int64) |
+                    (:t_actor, int64) |
+                    (:t_named, string, List[int64, mem(normal)]) |
+                    (:t_var, string)
+                , mem(normal)],
+                notes: { hints: List[{ node: int64, type: int64, strength: :proven | :declared | :inferred, policy: :default | :trust | :check | :advisory }, mem(normal)], overrides: List[{ node: int64, requirement: :a3_2 | :a3_3 | :a3_4 | :a4_2 | :a4_3 | :a4_4 | :a5_1 | :a5_4 | :a5_5 | :a6_8 | :a7_1, choice: :lowered | :default | :phase_field | :continuation_table | :back_edge | :budget_counter | :none | :single_pool | :pool_tree | :one_per_shape | :uniform_shape | :chosen | :result_values | :result_variants | :mixed | :rejected | :proxy | :liveness_check | :accept_sender_death | :silica_link | :supervisor_request | :not_supported | :lookup_tables | :module_table | :own_dispatch | :other | :not_applicable, detail: { params: List[(string, string), mem(normal)], note: string } }, mem(normal)] } }) |
+            (:type, {
+                head: { name: string, params: List[string, mem(normal)], exported: boolean, file: string },
+                at_line: int64,
+                types: List[
+                    (:t_int, :i8 | :i16 | :i32 | :i64 | :u8 | :u16 | :u32 | :u64) |
+                    (:t_float, :f32 | :f64) |
+                    (:t_basic, :boolean | :char | :text | :bytes | :symbol | :dynamic) |
+                    (:t_symbols, List[string, mem(normal)]) |
+                    (:t_tuple, List[int64, mem(normal)]) |
+                    (:t_tagged, string, List[int64, mem(normal)]) |
+                    (:t_record, List[(string, int64), mem(normal)]) |
+                    (:t_list, int64) |
+                    (:t_union, List[int64, mem(normal)]) |
+                    (:t_fun, List[int64, mem(normal)], int64) |
+                    (:t_actor, int64) |
+                    (:t_named, string, List[int64, mem(normal)]) |
+                    (:t_var, string)
+                , mem(normal)],
+                root: int64 }) |
+            (:entry, { function: string, arity: int64 }) |
+            (:gap, { name: string, place: { file: string, line: int64 }, construct: string, note: string })
+        }) |
+        // M4
+        (:unit_end, { seq: int64, unit_name: string, forms: int64 }) |
+        // M5
+        (:end, { seq: int64, units: int64 }) |
+        // M6
+        (:abort, { reason: string }) |
+        // M7
+        (:release, { session: string })
+    ) | (:rejected, atom) {
+    sequence proc[mem(normal), transport]
+        r: (:ok,
+                // M1
+                (:hello, { contract: int64, session: string,
+                           sender: { language: string, prefix: string, codex: string, codex_version: string },
+                           options: { profile: :bees | :silica,
+                                      choices: List[{ requirement: :a3_2 | :a3_3 | :a3_4 | :a4_2 | :a4_3 | :a4_4 | :a5_1 | :a5_4 | :a5_5 | :a6_8 | :a7_1, choice: :lowered | :default | :phase_field | :continuation_table | :back_edge | :budget_counter | :none | :single_pool | :pool_tree | :one_per_shape | :uniform_shape | :chosen | :result_values | :result_variants | :mixed | :rejected | :proxy | :liveness_check | :accept_sender_death | :silica_link | :supervisor_request | :not_supported | :lookup_tables | :module_table | :own_dispatch | :other | :not_applicable, params: List[(string, string), mem(normal)], note: string }, mem(normal)],
+                                      hints: { proven: :trust | :check | :advisory, declared: :trust | :check | :advisory, inferred: :trust | :check | :advisory },
+                                      run: { mode: :transpile | :check, max_frame: int64 } } }) |
+                // M2
+                (:unit_begin, { seq: int64, unit_name: string, silica_unit: string, source: string }) |
+                // M3
+                (:form, { seq: int64, unit_name: string, body:
+                    (:function, {
+                        head: { name: string, arity: int64, exported: boolean, file: string },
+                        code: { locations: List[(int64, int64), mem(normal)],
+                                nodes: List[
+                                    // literals and data
+                                    (:int, int64, int64) |
+                                    (:float, int64, string) |
+                                    (:text, int64, string) |
+                                    (:bytes, int64, string) |
+                                    (:symbol, int64, string) |
+                                    (:boolean, int64, boolean) |
+                                    (:nil, int64) |
+                                    (:tuple, int64, List[int64, mem(normal)]) |
+                                    (:cons, int64, int64, int64) |
+                                    (:list, int64, List[int64, mem(normal)], int64) |
+                                    (:map, int64, List[(int64, int64), mem(normal)], int64) |
+                                    (:record, int64, string, List[(string, int64), mem(normal)], int64) |
+                                    (:field, int64, int64, string) |
+                                    (:bits, int64, List[int64, mem(normal)]) |
+                                    (:segment, int64, int64, int64, int64, :integer | :float | :binary | :utf8, boolean, :big | :little) |
+                                    // names, matching, control
+                                    (:var, int64, string) |
+                                    (:wild, int64) |
+                                    (:match, int64, int64, int64) |
+                                    (:block, int64, List[int64, mem(normal)]) |
+                                    (:case, int64, int64, List[int64, mem(normal)]) |
+                                    (:clause, int64, List[int64, mem(normal)], int64, int64) |
+                                    (:cond, int64, List[int64, mem(normal)]) |
+                                    (:op, int64, string, List[int64, mem(normal)]) |
+                                    (:call, int64, string, string, List[int64, mem(normal)]) |
+                                    (:apply, int64, int64, List[int64, mem(normal)]) |
+                                    (:apply_mfa, int64, int64, int64, List[int64, mem(normal)]) |
+                                    (:fun_ref, int64, string, string, int64) |
+                                    (:lambda, int64, List[int64, mem(normal)]) |
+                                    (:loop_hint, int64, int64) |
+                                    // processes, messages, failure
+                                    (:self, int64) |
+                                    (:spawn, int64, int64, List[int64, mem(normal)], boolean) |
+                                    (:send, int64, int64, int64) |
+                                    (:receive, int64, List[int64, mem(normal)], int64, int64) |
+                                    (:link, int64, int64) |
+                                    (:exit_signal, int64, int64, int64) |
+                                    (:fail, int64, int64) |
+                                    (:try, int64, int64, List[int64, mem(normal)], List[int64, mem(normal)], int64) |
+                                    (:register, int64, string, int64) |
+                                    (:send_named, int64, string, int64) |
+                                    // gaps
+                                    (:gap_node, int64, string, string) |
+                                    // low-level
+                                    (:sl_call, int64, string, string, List[int64, mem(normal)]) |
+                                    (:sl_cast, int64, int64, int64) |
+                                    (:sl_spawn_child, int64, int64, string, string, int64, { reserve: int64, release: string, state_policy: string }) |
+                                    (:sl_fail_self, int64, int64) |
+                                    (:sl_stop_self, int64) |
+                                    (:sl_phase, int64, int64, List[int64, mem(normal)], string) |
+                                    (:sl_yield, int64, string, List[int64, mem(normal)]) |
+                                    (:sl_behaviour, int64, int64, int64, int64)
+                                , mem(normal)],
+                                clauses: List[int64, mem(normal)] },
+                        types: List[
+                            (:t_int, :i8 | :i16 | :i32 | :i64 | :u8 | :u16 | :u32 | :u64) |
+                            (:t_float, :f32 | :f64) |
+                            (:t_basic, :boolean | :char | :text | :bytes | :symbol | :dynamic) |
+                            (:t_symbols, List[string, mem(normal)]) |
+                            (:t_tuple, List[int64, mem(normal)]) |
+                            (:t_tagged, string, List[int64, mem(normal)]) |
+                            (:t_record, List[(string, int64), mem(normal)]) |
+                            (:t_list, int64) |
+                            (:t_union, List[int64, mem(normal)]) |
+                            (:t_fun, List[int64, mem(normal)], int64) |
+                            (:t_actor, int64) |
+                            (:t_named, string, List[int64, mem(normal)]) |
+                            (:t_var, string)
+                        , mem(normal)],
+                        notes: { hints: List[{ node: int64, type: int64, strength: :proven | :declared | :inferred, policy: :default | :trust | :check | :advisory }, mem(normal)], overrides: List[{ node: int64, requirement: :a3_2 | :a3_3 | :a3_4 | :a4_2 | :a4_3 | :a4_4 | :a5_1 | :a5_4 | :a5_5 | :a6_8 | :a7_1, choice: :lowered | :default | :phase_field | :continuation_table | :back_edge | :budget_counter | :none | :single_pool | :pool_tree | :one_per_shape | :uniform_shape | :chosen | :result_values | :result_variants | :mixed | :rejected | :proxy | :liveness_check | :accept_sender_death | :silica_link | :supervisor_request | :not_supported | :lookup_tables | :module_table | :own_dispatch | :other | :not_applicable, detail: { params: List[(string, string), mem(normal)], note: string } }, mem(normal)] } }) |
+                    (:type, {
+                        head: { name: string, params: List[string, mem(normal)], exported: boolean, file: string },
+                        at_line: int64,
+                        types: List[
+                            (:t_int, :i8 | :i16 | :i32 | :i64 | :u8 | :u16 | :u32 | :u64) |
+                            (:t_float, :f32 | :f64) |
+                            (:t_basic, :boolean | :char | :text | :bytes | :symbol | :dynamic) |
+                            (:t_symbols, List[string, mem(normal)]) |
+                            (:t_tuple, List[int64, mem(normal)]) |
+                            (:t_tagged, string, List[int64, mem(normal)]) |
+                            (:t_record, List[(string, int64), mem(normal)]) |
+                            (:t_list, int64) |
+                            (:t_union, List[int64, mem(normal)]) |
+                            (:t_fun, List[int64, mem(normal)], int64) |
+                            (:t_actor, int64) |
+                            (:t_named, string, List[int64, mem(normal)]) |
+                            (:t_var, string)
+                        , mem(normal)],
+                        root: int64 }) |
+                    (:entry, { function: string, arity: int64 }) |
+                    (:gap, { name: string, place: { file: string, line: int64 }, construct: string, note: string })
+                }) |
+                // M4
+                (:unit_end, { seq: int64, unit_name: string, forms: int64 }) |
+                // M5
+                (:end, { seq: int64, units: int64 }) |
+                // M6
+                (:abort, { reason: string }) |
+                // M7
+                (:release, { session: string })
+            ) | (:rejected, atom) <- decode((:etf), frame, { max_bytes: 1048576, max_depth: 16, max_length: 65536 })
+    produces
+        pure r
+    end
+}
+
+// Every frame the transpiler sends (R1..R9). A sender written in Silica may decode with this.
+fn decode_to_sender(frame: string) -> (:ok,
+        // R1
+        (:welcome, { session: string, contract: int64, transpiler: string, flow: { resume_from: int64, credit: int64, max_frame: int64 } }) |
+        // R2
+        (:refused, { reason: :contract | :session_mismatch | :unknown_session | :busy | :choices | :bad_hello, detail: string }) |
+        // R3
+        (:credit, int64) |
+        // R4
+        (:stored, int64) |
+        // R5
+        (:rejected, { seq: int64, reason: atom, where: string }) |
+        // R6
+        (:progress, { stage: :resolve | :hints | :lower | :mechanics | :print | :write, unit_name: string }) |
+        // R7
+        (:diagnostic, { seq: int64, unit_name: string, finding: { severity: :error | :warning | :note, code: string, message: string },
+                       place: { file: string, line: int64, column: int64 } }) |
+        // R8
+        (:result, { status: :ok | :partial | :failed, counts: { units: int64, gaps: int64, rejected: int64 }, session: string, files: int64 }) |
+        // R9
+        (:released, { session: string, freed: boolean })
+    ) | (:rejected, atom) {
+    sequence proc[mem(normal), transport]
+        r: (:ok,
+                // R1
+                (:welcome, { session: string, contract: int64, transpiler: string, flow: { resume_from: int64, credit: int64, max_frame: int64 } }) |
+                // R2
+                (:refused, { reason: :contract | :session_mismatch | :unknown_session | :busy | :choices | :bad_hello, detail: string }) |
+                // R3
+                (:credit, int64) |
+                // R4
+                (:stored, int64) |
+                // R5
+                (:rejected, { seq: int64, reason: atom, where: string }) |
+                // R6
+                (:progress, { stage: :resolve | :hints | :lower | :mechanics | :print | :write, unit_name: string }) |
+                // R7
+                (:diagnostic, { seq: int64, unit_name: string, finding: { severity: :error | :warning | :note, code: string, message: string },
+                               place: { file: string, line: int64, column: int64 } }) |
+                // R8
+                (:result, { status: :ok | :partial | :failed, counts: { units: int64, gaps: int64, rejected: int64 }, session: string, files: int64 }) |
+                // R9
+                (:released, { session: string, freed: boolean })
+            ) | (:rejected, atom) <- decode((:etf), frame, { max_bytes: 1048576, max_depth: 16, max_length: 65536 })
+    produces
+        pure r
+    end
+}
+
+// :ok when the frame is a valid M1..M7 frame, otherwise the rejection reason (contract T5.5).
+fn check_to_transpiler(frame: string) -> atom {
+    case decode_to_transpiler(frame) of {
+        (:ok, _v:
+            // M1
+            (:hello, { contract: int64, session: string,
+                       sender: { language: string, prefix: string, codex: string, codex_version: string },
+                       options: { profile: :bees | :silica,
+                                  choices: List[{ requirement: :a3_2 | :a3_3 | :a3_4 | :a4_2 | :a4_3 | :a4_4 | :a5_1 | :a5_4 | :a5_5 | :a6_8 | :a7_1, choice: :lowered | :default | :phase_field | :continuation_table | :back_edge | :budget_counter | :none | :single_pool | :pool_tree | :one_per_shape | :uniform_shape | :chosen | :result_values | :result_variants | :mixed | :rejected | :proxy | :liveness_check | :accept_sender_death | :silica_link | :supervisor_request | :not_supported | :lookup_tables | :module_table | :own_dispatch | :other | :not_applicable, params: List[(string, string), mem(normal)], note: string }, mem(normal)],
+                                  hints: { proven: :trust | :check | :advisory, declared: :trust | :check | :advisory, inferred: :trust | :check | :advisory },
+                                  run: { mode: :transpile | :check, max_frame: int64 } } }) |
+            // M2
+            (:unit_begin, { seq: int64, unit_name: string, silica_unit: string, source: string }) |
+            // M3
+            (:form, { seq: int64, unit_name: string, body:
+                (:function, {
+                    head: { name: string, arity: int64, exported: boolean, file: string },
+                    code: { locations: List[(int64, int64), mem(normal)],
+                            nodes: List[
+                                // literals and data
+                                (:int, int64, int64) |
+                                (:float, int64, string) |
+                                (:text, int64, string) |
+                                (:bytes, int64, string) |
+                                (:symbol, int64, string) |
+                                (:boolean, int64, boolean) |
+                                (:nil, int64) |
+                                (:tuple, int64, List[int64, mem(normal)]) |
+                                (:cons, int64, int64, int64) |
+                                (:list, int64, List[int64, mem(normal)], int64) |
+                                (:map, int64, List[(int64, int64), mem(normal)], int64) |
+                                (:record, int64, string, List[(string, int64), mem(normal)], int64) |
+                                (:field, int64, int64, string) |
+                                (:bits, int64, List[int64, mem(normal)]) |
+                                (:segment, int64, int64, int64, int64, :integer | :float | :binary | :utf8, boolean, :big | :little) |
+                                // names, matching, control
+                                (:var, int64, string) |
+                                (:wild, int64) |
+                                (:match, int64, int64, int64) |
+                                (:block, int64, List[int64, mem(normal)]) |
+                                (:case, int64, int64, List[int64, mem(normal)]) |
+                                (:clause, int64, List[int64, mem(normal)], int64, int64) |
+                                (:cond, int64, List[int64, mem(normal)]) |
+                                (:op, int64, string, List[int64, mem(normal)]) |
+                                (:call, int64, string, string, List[int64, mem(normal)]) |
+                                (:apply, int64, int64, List[int64, mem(normal)]) |
+                                (:apply_mfa, int64, int64, int64, List[int64, mem(normal)]) |
+                                (:fun_ref, int64, string, string, int64) |
+                                (:lambda, int64, List[int64, mem(normal)]) |
+                                (:loop_hint, int64, int64) |
+                                // processes, messages, failure
+                                (:self, int64) |
+                                (:spawn, int64, int64, List[int64, mem(normal)], boolean) |
+                                (:send, int64, int64, int64) |
+                                (:receive, int64, List[int64, mem(normal)], int64, int64) |
+                                (:link, int64, int64) |
+                                (:exit_signal, int64, int64, int64) |
+                                (:fail, int64, int64) |
+                                (:try, int64, int64, List[int64, mem(normal)], List[int64, mem(normal)], int64) |
+                                (:register, int64, string, int64) |
+                                (:send_named, int64, string, int64) |
+                                // gaps
+                                (:gap_node, int64, string, string) |
+                                // low-level
+                                (:sl_call, int64, string, string, List[int64, mem(normal)]) |
+                                (:sl_cast, int64, int64, int64) |
+                                (:sl_spawn_child, int64, int64, string, string, int64, { reserve: int64, release: string, state_policy: string }) |
+                                (:sl_fail_self, int64, int64) |
+                                (:sl_stop_self, int64) |
+                                (:sl_phase, int64, int64, List[int64, mem(normal)], string) |
+                                (:sl_yield, int64, string, List[int64, mem(normal)]) |
+                                (:sl_behaviour, int64, int64, int64, int64)
+                            , mem(normal)],
+                            clauses: List[int64, mem(normal)] },
+                    types: List[
+                        (:t_int, :i8 | :i16 | :i32 | :i64 | :u8 | :u16 | :u32 | :u64) |
+                        (:t_float, :f32 | :f64) |
+                        (:t_basic, :boolean | :char | :text | :bytes | :symbol | :dynamic) |
+                        (:t_symbols, List[string, mem(normal)]) |
+                        (:t_tuple, List[int64, mem(normal)]) |
+                        (:t_tagged, string, List[int64, mem(normal)]) |
+                        (:t_record, List[(string, int64), mem(normal)]) |
+                        (:t_list, int64) |
+                        (:t_union, List[int64, mem(normal)]) |
+                        (:t_fun, List[int64, mem(normal)], int64) |
+                        (:t_actor, int64) |
+                        (:t_named, string, List[int64, mem(normal)]) |
+                        (:t_var, string)
+                    , mem(normal)],
+                    notes: { hints: List[{ node: int64, type: int64, strength: :proven | :declared | :inferred, policy: :default | :trust | :check | :advisory }, mem(normal)], overrides: List[{ node: int64, requirement: :a3_2 | :a3_3 | :a3_4 | :a4_2 | :a4_3 | :a4_4 | :a5_1 | :a5_4 | :a5_5 | :a6_8 | :a7_1, choice: :lowered | :default | :phase_field | :continuation_table | :back_edge | :budget_counter | :none | :single_pool | :pool_tree | :one_per_shape | :uniform_shape | :chosen | :result_values | :result_variants | :mixed | :rejected | :proxy | :liveness_check | :accept_sender_death | :silica_link | :supervisor_request | :not_supported | :lookup_tables | :module_table | :own_dispatch | :other | :not_applicable, detail: { params: List[(string, string), mem(normal)], note: string } }, mem(normal)] } }) |
+                (:type, {
+                    head: { name: string, params: List[string, mem(normal)], exported: boolean, file: string },
+                    at_line: int64,
+                    types: List[
+                        (:t_int, :i8 | :i16 | :i32 | :i64 | :u8 | :u16 | :u32 | :u64) |
+                        (:t_float, :f32 | :f64) |
+                        (:t_basic, :boolean | :char | :text | :bytes | :symbol | :dynamic) |
+                        (:t_symbols, List[string, mem(normal)]) |
+                        (:t_tuple, List[int64, mem(normal)]) |
+                        (:t_tagged, string, List[int64, mem(normal)]) |
+                        (:t_record, List[(string, int64), mem(normal)]) |
+                        (:t_list, int64) |
+                        (:t_union, List[int64, mem(normal)]) |
+                        (:t_fun, List[int64, mem(normal)], int64) |
+                        (:t_actor, int64) |
+                        (:t_named, string, List[int64, mem(normal)]) |
+                        (:t_var, string)
+                    , mem(normal)],
+                    root: int64 }) |
+                (:entry, { function: string, arity: int64 }) |
+                (:gap, { name: string, place: { file: string, line: int64 }, construct: string, note: string })
+            }) |
+            // M4
+            (:unit_end, { seq: int64, unit_name: string, forms: int64 }) |
+            // M5
+            (:end, { seq: int64, units: int64 }) |
+            // M6
+            (:abort, { reason: string }) |
+            // M7
+            (:release, { session: string })
+        ) -> :ok;
+        (:rejected, why: atom) -> why
+    }
+}
+
+// :ok when the frame is a valid R1..R9 frame, otherwise the rejection reason.
+fn check_to_sender(frame: string) -> atom {
+    case decode_to_sender(frame) of {
+        (:ok, _v:
+            // R1
+            (:welcome, { session: string, contract: int64, transpiler: string, flow: { resume_from: int64, credit: int64, max_frame: int64 } }) |
+            // R2
+            (:refused, { reason: :contract | :session_mismatch | :unknown_session | :busy | :choices | :bad_hello, detail: string }) |
+            // R3
+            (:credit, int64) |
+            // R4
+            (:stored, int64) |
+            // R5
+            (:rejected, { seq: int64, reason: atom, where: string }) |
+            // R6
+            (:progress, { stage: :resolve | :hints | :lower | :mechanics | :print | :write, unit_name: string }) |
+            // R7
+            (:diagnostic, { seq: int64, unit_name: string, finding: { severity: :error | :warning | :note, code: string, message: string },
+                           place: { file: string, line: int64, column: int64 } }) |
+            // R8
+            (:result, { status: :ok | :partial | :failed, counts: { units: int64, gaps: int64, rejected: int64 }, session: string, files: int64 }) |
+            // R9
+            (:released, { session: string, freed: boolean })
+        ) -> :ok;
+        (:rejected, why: atom) -> why
+    }
+}

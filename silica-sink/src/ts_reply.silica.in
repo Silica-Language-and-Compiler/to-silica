@@ -1,0 +1,107 @@
+// ts_reply: the frames the transpiler sends (contract 5.3, R1..R9), each already framed for the stream: the 4-byte
+// length and the ETF bytes (contract T4.1). The shapes are those of tcp_transport_v1@decode_to_sender.
+//
+// Source file: ts_reply.silica.in; the $NAME$ placeholders are spelled out by silica-sink/tools/expand.py.
+module ts_reply;
+
+use wire_etf;
+use wireframe;
+use ts_config;
+
+export welcome_frame/4;
+export refused_frame/2;
+export credit_frame/1;
+export stored_frame/1;
+export rejected_frame/3;
+export diagnostic_frame/4;
+export finding_frame/5;
+export placed_frame/8;
+export result_frame/4;
+export released_frame/2;
+
+fn first_segment(xs: $LS$) -> string {
+    case xs of {
+        []: $LS$ -> "";
+        [h: string, _t: $LS$] -> h
+    }
+}
+
+// One frame as it travels: the 4-byte length and the ETF bytes (contract T4.1).
+fn framed(etf: string) -> string {
+    first_segment(wireframe@frame(etf, 0, :stream))
+}
+
+// resume_from is the first seq to send: 0 for a new session (contract R1, T6.5).
+fn welcome_frame(id: string, resume_from: int64, credit: int64, max_frame: int64) -> string {
+    sequence proc[mem(normal), transport]
+        version: int64 <- 1;
+        e: string <- encode((:etf), (:welcome, { session: id, contract: version, transpiler: ts_config@transpiler_name(), flow: { resume_from: resume_from, credit: credit, max_frame: max_frame } }))
+    produces
+        pure framed(e)
+    end
+}
+
+fn refused_frame(reason: atom, detail: string) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:refused, { reason: reason, detail: detail }))
+    produces
+        pure framed(e)
+    end
+}
+
+fn credit_frame(n: int64) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:credit, n))
+    produces
+        pure framed(e)
+    end
+}
+
+fn rejected_frame(seq: int64, reason: atom, where: string) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:rejected, { seq: seq, reason: reason, where: where }))
+    produces
+        pure framed(e)
+    end
+}
+
+fn result_frame(status: atom, n: $COUNTS$, id: string, files: int64) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:result, { status: status, counts: n, session: id, files: files }))
+    produces
+        pure framed(e)
+    end
+}
+
+fn released_frame(session: string, freed: boolean) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:released, { session: session, freed: freed }))
+    produces
+        pure framed(e)
+    end
+}
+
+fn stored_frame(next: int64) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:stored, next))
+    produces
+        pure framed(e)
+    end
+}
+
+// A finding about frame seq of unit_name, at a place in the sender's source (line 0: no place).
+fn placed_frame(seq: int64, unit_name: string, severity: atom, code: string, message: string, file: string, line: int64, column: int64) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), (:diagnostic, { seq: seq, unit_name: unit_name, finding: { severity: severity, code: code, message: message }, place: { file: file, line: line, column: column } }))
+    produces
+        pure framed(e)
+    end
+}
+
+fn finding_frame(seq: int64, unit_name: string, severity: atom, code: string, message: string) -> string {
+    placed_frame(seq, unit_name, severity, code, message, "", 0, 0)
+}
+
+fn diagnostic_frame(seq: int64, unit_name: string, code: string, message: string) -> string {
+    placed_frame(seq, unit_name, :warning, code, message, "", 0, 0)
+}

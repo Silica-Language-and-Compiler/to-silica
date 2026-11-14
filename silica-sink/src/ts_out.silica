@@ -1,0 +1,32 @@
+// ts_out: the few things every actor unit of the transpiler does to the outside: a line on standard output, a
+// line on standard error, the end of the program. Pure Silica, no placeholders (not generated).
+module ts_out;
+
+export say/1;
+export complain/1;
+export leave/1;
+
+fn say(line: string) -> atom {
+    sequence proc[device_io]
+        o: atom <- println(line)
+    produces
+        pure o
+    end
+}
+
+fn complain(line: string) -> atom {
+    sequence proc[device_io]
+        o: atom <- println_stderr(line)
+    produces
+        pure o
+    end
+}
+
+// Ends the program with this exit status (main's wait_for_exit answers it).
+fn leave(status: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_exit(status)
+    produces
+        pure b
+    end
+}

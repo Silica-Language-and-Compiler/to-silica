@@ -1,0 +1,524 @@
+// ts_actor_store: the store owners (app design 3.3, 4) and their supervisor. A store owner holds one region's
+// session; the region's carrier is owned by the region's port (dangerous_ts_port), which carries the owner's
+// commands to the carrier and the carrier's events back.
+// The tree, the restart rules and the messages between the actors are described in dangerous_to_silica.
+//
+// Source file: ts_actor_store.silica.in; the $NAME$ placeholders are spelled out by silica-sink/tools/expand.py.
+module ts_actor_store;
+
+use Supervisor;
+use wire_etf;
+use wireframe;
+use Carrier;
+use ts_text;
+use ts_out;
+use ts_config;
+use ts_pool;
+use ts_reply;
+use ts_records;
+use ts_region;
+
+export store_sup/1;
+
+impl ts_actor_store for Supervisor;
+
+//
+// One per region. It owns the region's (:store) carrier and is leased to one session at a time.
+// job.phase: 0 free; 1 a session is attached and storing; 2 the session is detached (its connection is gone) and
+// can be resumed; 3 the (:end) is stored and the session is being transpiled; 4 finished, holding the output until
+// released; 5 clearing (an abort or a release is being made durable, then the region is trimmed).
+// io.mode, the replay in progress: 0 none; 1 recovery after the open (app design 4.3); 2 rebuilding a resumed
+// session's state in its session actor; 3 feeding the transpile actor; 4 stopping a replay to start a new attempt.
+// io.waits: what each :sync still unanswered is for, oldest first: n >= 0 a mark (answer (:stored, n)); -1 the
+// session's end; -2 the output files; -3 the (:transpiled) record; -4 a release; -5 an abort; -6 nothing to do.
+
+fn show_output(id: string, path: string, content: string) -> atom {
+    case ts_config@debug_output() of {
+        false -> :ok;
+        true -> {
+            sequence proc[device_io]
+                _: atom <- println(concat(ts_text@concat4("=== to-silica output file: ", path, " session: ", id), " ==="));
+                _: atom <- print(content);
+                o: atom <- println(ts_text@concat3("=== end of ", path, " ==="))
+            produces
+                pure o
+            end
+        }
+    }
+}
+
+// The session's transpiling is over (or was given up): the output files are made durable, then the
+// (:transpiled, ...) record, then the result is sent (app design 6.5, contract T6.8).
+fn finishing(state: $OWNER_STATE$, status: atom, n: $COUNTS$, files: int64, diag: string) -> $OWNER_STATE$ {
+    final: atom <- case status == :ok and (state.job.tally.rejected > 0 or state.job.tally.miscounts > 0) of {
+        true -> :partial;
+        false -> status
+    };
+    result: string <- concat(diag, ts_reply@result_frame(final, n, state.job.id, files));
+    ts_region@sync_for(ts_region@own(state, state.io, ts_region@job_done(state.job, result, ts_records@transpiled_etf(final, n, state.job.id, files))), 0 - 2)
+}
+
+fn give_up(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    finishing(state, :failed, { units: 0, gaps: 0, rejected: state.job.tally.rejected }, 0,
+              ts_reply@finding_frame(0 - 1, "", :error, "T5002", "the transpile actor failed on every attempt; nothing was written for the session"))
+}
+
+// A transpile attempt (app design 3.4): an (:output_begin, ...) record, then the session's records are replayed to
+// the region's transpile actor from the session's first.
+fn start_attempt(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.job.attempt >= ts_config@transpile_attempts() of {
+        true -> give_up(ts_region@own(state, ts_region@io_mode(state.io, 0, state.io.rx_credit), state.job));
+        false -> {
+            attempt: int64 <- state.job.attempt + 1;
+            begun: $OWNER_STATE$ <- ts_region@put_own(ts_region@own(state, state.io, ts_region@job_attempt(state.job, attempt)), ts_records@output_begin_etf(attempt));
+            _: boolean <- ts_region@t_start(state.r, attempt, state.job.id);
+            ts_region@begin_read(begun, state.job.base, 3)
+        }
+    }
+}
+
+// One stored record met by the recovery after an open (app design 4.3).
+fn recover_one(schema: int64, record: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case schema == ts_records@own_schema() of {
+        false -> case state.job.phase == 2 and length_bytes(state.job.hello) == 0 of {
+            true -> ts_region@own(state, state.io, { phase: 2, slot: 0 - 1, token: 0, id: state.job.id, base: state.job.base, hello: ts_text@fresh(record), attempt: 0, tally: state.job.tally, result: "", pending: "" });
+            false -> state
+        };
+        true -> {
+            sm: $OWNSUM$ <- ts_records@summary(record);
+            case sm.kind of {
+                :session -> ts_region@own(state, state.io, { phase: 2, slot: 0 - 1, token: 0, id: ts_text@fresh(sm.text), base: ts_pool@base_of(sm.text), hello: "", attempt: 0, tally: { rejected: 0, frames: 0, miscounts: 0 }, result: "", pending: "" });
+                :ended -> ts_region@own(state, state.io, { phase: 3, slot: 0 - 1, token: 0, id: state.job.id, base: state.job.base, hello: state.job.hello, attempt: state.job.attempt, tally: { rejected: sm.a, frames: sm.b, miscounts: sm.c }, result: "", pending: "" });
+                :output_begin -> ts_region@own(state, state.io, ts_region@job_attempt(state.job, sm.a));
+                :transpiled -> ts_region@own(state, state.io, ts_region@job_done(ts_region@job_phase(state.job, 4), ts_text@fresh(sm.text), ""));
+                :aborted -> ts_region@own(state, state.io, ts_region@idle_job());
+                :released -> ts_region@own(state, state.io, ts_region@idle_job());
+                _: atom -> state
+            }
+        }
+    }
+}
+
+fn phase_text(phase: int64) -> string {
+    case phase of {
+        0 -> "free";
+        2 -> "an unfinished session, kept for a resume";
+        3 -> "a session to transpile";
+        4 -> "a finished session, kept until released";
+        _: int64 -> "busy"
+    }
+}
+
+// The recovery replay is over: act on what the region holds.
+fn recovered(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    _: atom <- ts_out@say(concat(ts_text@concat4("to-silica: region ", ts_pool@region_label(state.r), " recovered: ", phase_text(state.job.phase)), concat(" ", state.job.id)));
+    calm: $OWNER_STATE$ <- ts_region@own(state, ts_region@io_mode(state.io, 0, state.io.rx_credit), state.job);
+    case state.job.phase of {
+        0 -> {
+            _: boolean <- case state.io.next > state.io.oldest of {
+                true -> ts_region@car_trim(state.car, state.io.next);
+                false -> true
+            };
+            calm
+        };
+        3 -> start_attempt(calm);
+        _: int64 -> calm
+    }
+}
+
+// One whole record of a replay, by what the replay is for. For a record handed to another actor, the store gets
+// its next credit when that actor answers (:more, ...) or (:t_more, ...): at most a window of records is on its way.
+fn deliver(schema: int64, record: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.io.mode of {
+        1 -> ts_region@grant(recover_one(schema, record, state));
+        2 -> {
+            _: boolean <- ts_region@tell_rebuild(state.job.slot, state.job.token, schema, record);
+            state
+        };
+        3 -> case schema == ts_records@frame_schema() of {
+            true -> {
+                _: boolean <- ts_region@t_record(state.r, state.job.attempt, record);
+                state
+            };
+            false -> ts_region@grant(state)
+        };
+        _: int64 -> state
+    }
+}
+
+fn unwrapped(payload: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case wireframe@unrecord(payload) of {
+        (:ok, _format: atom, schema: int64, frame: string) -> deliver(schema, frame, state);
+        (:rejected, _why: atom) -> ts_region@grant(state)
+    }
+}
+
+fn reassembled(un: (:more, $RX$) | (:frame, string, $RX$) | (:rejected, atom), state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case un of {
+        (:more, r1: $RX$) -> ts_region@grant(ts_region@own_rx(state, { mode: r1.mode, expected: r1.expected, pending: ts_text@fresh(r1.pending) }));
+        (:frame, payload: string, r2: $RX$) -> unwrapped(payload, ts_region@own_rx(state, { mode: r2.mode, expected: r2.expected, pending: ts_text@fresh(r2.pending) }));
+        (:rejected, _why: atom) -> ts_region@grant(ts_region@own_rx(state, wireframe@fresh(Carrier@boundaries(:store))))
+    }
+}
+
+// One store record of the replay: reassembled, unwrapped, delivered.
+fn on_rx(record: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.io.mode == 0 or state.io.mode == 4 of {
+        true -> state;
+        false -> reassembled(wireframe@unframe(state.rx, record, 16777216), state)
+    }
+}
+
+fn on_rx_end(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    calm: $OWNER_STATE$ <- ts_region@own(state, ts_region@io_mode(state.io, 0, state.io.rx_credit), state.job);
+    case state.io.mode of {
+        1 -> recovered(state);
+        2 -> {
+            _: boolean <- ts_region@tell(state.job.slot, state.job.token, :leased, state.job.id, 0);
+            calm
+        };
+        3 -> {
+            _: boolean <- ts_region@t_end(state.r, state.job.attempt);
+            calm
+        };
+        4 -> start_attempt(calm);
+        _: int64 -> calm
+    }
+}
+
+// The store answered a :sync: everything below next is durable. The oldest waiting purpose is served.
+fn served(code: int64, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case code >= 0 of {
+        true -> {
+            _: boolean <- ts_region@tell(state.job.slot, state.job.token, :stored, "", code);
+            state
+        };
+        false -> case code == 0 - 1 of {
+            true -> {
+                _: boolean <- ts_region@tell(state.job.slot, state.job.token, :stored, "", state.job.tally.frames);
+                start_attempt(state)
+            };
+            false -> case code == 0 - 2 of {
+                true -> ts_region@sync_for(ts_region@put_own(state, state.job.pending), 0 - 3);
+                false -> case code == 0 - 3 of {
+                    true -> {
+                        _: boolean <- ts_region@tell(state.job.slot, state.job.token, :result, state.job.result, 0);
+                        ts_region@own(state, state.io, ts_region@job_phase(state.job, 4))
+                    };
+                    false -> case code == 0 - 4 or code == 0 - 5 of {
+                        true -> {
+                            _: boolean <- ts_region@car_trim(state.car, state.io.next);
+                            state
+                        };
+                        false -> state
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn on_synced(next: int64, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    io: $OWNER_IO$ <- ts_region@io_next(state.io, next);
+    case state.io.waits of {
+        []: $LI$ -> ts_region@own(state, io, state.job);
+        [code: int64, rest: $LI$] -> served(code, ts_region@own(state, ts_region@io_waits(io, rest), state.job))
+    }
+}
+
+// (:log, ...) follows the open, and every trim once it is durable.
+fn on_log(oldest: int64, next: int64, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    io: $OWNER_IO$ <- { up: true, closing: state.io.closing, next: next, oldest: oldest, rx_credit: state.io.rx_credit, waits: state.io.waits, mode: state.io.mode, free_slot: state.io.free_slot, free_token: state.io.free_token };
+    case state.io.up of {
+        false -> case next > oldest of {
+            true -> ts_region@begin_read(ts_region@own(state, io, state.job), oldest, 1);
+            false -> {
+                _: atom <- ts_out@say(ts_text@concat3("to-silica: region ", ts_pool@region_label(state.r), " open: free"));
+                ts_region@own(state, io, state.job)
+            }
+        };
+        true -> case state.job.phase == 5 of {
+            false -> ts_region@own(state, io, state.job);
+            true -> {
+                _: boolean <- ts_region@tell(state.io.free_slot, state.io.free_token, :freed, state.job.id, 0);
+                ts_region@own(state, ts_region@io_free(io, 0 - 1, 0), ts_region@idle_job())
+            }
+        }
+    }
+}
+
+fn pass_lease(r: int64, slot: int64, token: int64, hop: int64, hello: string) -> boolean {
+    case hop + 1 >= ts_pool@regions() of {
+        true -> ts_region@tell(slot, token, :busy, "", 0);
+        false -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name((r + 1) % ts_pool@regions()), (:lease, slot, token, hop + 1, hello) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn on_lease(slot: int64, token: int64, hop: int64, hello: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.io.up and not state.io.closing and state.io.mode == 0 and state.job.phase == 0 of {
+        false -> {
+            _: boolean <- pass_lease(state.r, slot, token, hop, hello);
+            state
+        };
+        true -> {
+            id: string <- ts_pool@session_id(state.r, state.io.next);
+            job: $JOB$ <- { phase: 1, slot: slot, token: token, id: id, base: state.io.next, hello: ts_text@fresh(hello), attempt: 0, tally: { rejected: 0, frames: 0, miscounts: 0 }, result: "", pending: "" };
+            named: $OWNER_STATE$ <- ts_region@put_own(ts_region@own(state, state.io, job), ts_records@session_etf(id));
+            n: int64 <- ts_region@append(named.car, ts_records@frame_schema(), hello);
+            _: boolean <- ts_region@tell(slot, token, :leased, id, 0);
+            ts_region@own(named, ts_region@io_next(named.io, named.io.next + n), named.job)
+        }
+    }
+}
+
+// A hello that resumes session id (contract T6.5).
+fn on_resume(slot: int64, token: int64, id: string, hello: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    phase: int64 <- state.job.phase;
+    case state.io.up and id == state.job.id and phase >= 1 and phase <= 4 of {
+        false -> {
+            _: boolean <- ts_region@tell(slot, token, :unknown, id, 0);
+            state
+        };
+        true -> case hello == state.job.hello of {
+            false -> {
+                _: boolean <- ts_region@tell(slot, token, :mismatch, id, 0);
+                state
+            };
+            true -> case phase of {
+                3 -> {
+                    _: boolean <- ts_region@tell(slot, token, :ended, id, state.job.tally.frames);
+                    ts_region@own(state, state.io, ts_region@job_attached(state.job, 3, slot, token))
+                };
+                4 -> {
+                    _: boolean <- ts_region@tell(slot, token, :ended, id, state.job.tally.frames);
+                    _: boolean <- ts_region@tell(slot, token, :result, state.job.result, 0);
+                    ts_region@own(state, state.io, ts_region@job_attached(state.job, 4, slot, token))
+                };
+                _: int64 -> case state.io.mode == 0 of {
+                    false -> {
+                        _: boolean <- ts_region@tell(slot, token, :busy, id, 0);
+                        state
+                    };
+                    true -> ts_region@begin_read(ts_region@own(state, state.io, ts_region@job_attached(state.job, 1, slot, token)), state.job.base, 2)
+                }
+            }
+        }
+    }
+}
+
+fn attached(slot: int64, state: $OWNER_STATE$) -> boolean {
+    state.job.slot == slot and state.job.phase == 1
+}
+
+fn on_finish(rejected: int64, frames: int64, miscounts: int64, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    job: $JOB$ <- { phase: 3, slot: state.job.slot, token: state.job.token, id: state.job.id, base: state.job.base, hello: state.job.hello, attempt: 0, tally: { rejected: rejected, frames: frames, miscounts: miscounts }, result: "", pending: "" };
+    ts_region@sync_for(ts_region@put_own(ts_region@own(state, state.io, job), ts_records@ended_etf(rejected, frames, miscounts)), 0 - 1)
+}
+
+// An (:abort) (contract M6), or a lease nobody will use: the session is given up and its region cleared.
+fn on_drop(reason: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    ts_region@sync_for(ts_region@put_own(ts_region@own(state, ts_region@io_free(state.io, 0 - 1, 0), ts_region@job_phase(state.job, 5)), ts_records@aborted_etf(reason)), 0 - 5)
+}
+
+// The session actor's connection is gone, or the session actor was restarted.
+fn on_detach(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.job.phase of {
+        1 -> {
+            stopped: $OWNER_STATE$ <- case state.io.mode == 2 of {
+                true -> {
+                    _: boolean <- ts_region@car_read_stop(state.car);
+                    ts_region@own(state, ts_region@io_mode(state.io, 0, state.io.rx_credit), state.job)
+                };
+                false -> state
+            };
+            ts_region@sync_for(ts_region@own(stopped, stopped.io, ts_region@job_attached(state.job, 2, 0 - 1, 0)), 0 - 6)
+        };
+        3 -> ts_region@own(state, state.io, ts_region@job_attached(state.job, 3, 0 - 1, 0));
+        4 -> ts_region@own(state, state.io, ts_region@job_attached(state.job, 4, 0 - 1, 0));
+        _: int64 -> state
+    }
+}
+
+fn on_free(slot: int64, token: int64, id: string, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.job.phase == 4 and id == state.job.id of {
+        false -> {
+            _: boolean <- ts_region@tell(slot, token, :not_freed, id, 0);
+            state
+        };
+        true -> ts_region@sync_for(ts_region@put_own(ts_region@own(state, ts_region@io_free(state.io, slot, token), ts_region@job_phase(state.job, 5)), ts_records@released_etf(id)), 0 - 4)
+    }
+}
+
+// The transpile actor of this region was restarted (app design 3.4).
+fn on_t_boot(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.job.phase == 3 and length_bytes(state.job.pending) == 0 of {
+        false -> state;
+        true -> case state.io.mode of {
+            3 -> {
+                _: boolean <- ts_region@car_read_stop(state.car);
+                ts_region@own(state, ts_region@io_mode(state.io, 4, state.io.rx_credit), state.job)
+            };
+            0 -> start_attempt(state);
+            _: int64 -> state
+        }
+    }
+}
+
+// The region is full (T5001): the session cannot go on. It is given up and the region cleared.
+fn on_full(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.job.phase == 1 or state.job.phase == 3 of {
+        false -> state;
+        true -> {
+            _: boolean <- ts_region@tell(state.job.slot, state.job.token, :full, "", 0);
+            _: boolean <- case state.io.mode == 0 of {
+                true -> true;
+                false -> ts_region@car_read_stop(state.car)
+            };
+            ts_region@sync_for(ts_region@own(state, ts_region@io_free(ts_region@io_mode(state.io, 0, state.io.rx_credit), 0 - 1, 0), ts_region@job_phase(state.job, 5)), 0 - 5)
+        }
+    }
+}
+
+// The orderly end (main, after wait_for_exit): each owner closes its carrier, which drains and flushes it, and
+// passes the turn on; the last ends the program.
+fn shutdown_next(r: int64) -> boolean {
+    case r + 1 >= ts_pool@regions() of {
+        true -> ts_out@leave(0);
+        false -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r + 1), (:shutdown, 0) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn on_shutdown(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    closing: $OWNER_IO$ <- { up: state.io.up, closing: true, next: state.io.next, oldest: state.io.oldest, rx_credit: state.io.rx_credit, waits: state.io.waits, mode: state.io.mode, free_slot: state.io.free_slot, free_token: state.io.free_token };
+    _: boolean <- ts_region@car_close(state.car);
+    ts_region@own(state, closing, state.job)
+}
+
+fn on_link_down(why: atom, state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    case state.io.closing and why == :closed of {
+        true -> {
+            _: boolean <- shutdown_next(state.r);
+            state
+        };
+        false -> {
+            _: atom <- ts_out@complain(concat(ts_text@concat4("to-silica: region ", ts_pool@region_label(state.r), " is down: ", atom_name(why)), "; the transpiler ends (what is durable is recovered at the next start)"));
+            _: boolean <- ts_out@leave(1);
+            state
+        }
+    }
+}
+
+fn owner(msg: $OWNER_EVENT$, state: $OWNER_STATE$) -> (:no_reply, $OWNER_STATE$) {
+    case msg of {
+        (:boot, _z: int64) -> {
+            // The first start, or a restart: the port starts a new carrier on the region (it closes the one it
+            // had first), and the open's (:log, ...) starts the recovery of what the region holds.
+            _: boolean <- ts_region@car_boot(state.r);
+            (:no_reply, ts_region@owner_initial(state.r))
+        };
+        (:port_lost, _r: int64) -> {
+            _: atom <- ts_out@complain(ts_text@concat3("to-silica: the port of region ", ts_pool@region_label(state.r), " was restarted and its carrier is lost; the transpiler ends (what is durable is recovered at the next start)"));
+            _: boolean <- ts_out@leave(1);
+            (:no_reply, state)
+        };
+        (:shutdown, _z: int64) -> (:no_reply, on_shutdown(state));
+        (:link_up, _info: string) -> (:no_reply, state);
+        (:log, oldest: int64, next: int64, _capacity: int64) -> (:no_reply, on_log(oldest, next, state));
+        (:tx_credit, _n: int64) -> (:no_reply, state);
+        (:synced, next: int64) -> (:no_reply, on_synced(next, state));
+        (:rx, record: string) -> (:no_reply, on_rx(record, ts_region@took(state)));
+        (:rx_end, _next: int64) -> (:no_reply, on_rx_end(state));
+        (:tx_failed, why: atom) -> {
+            _: atom <- ts_out@complain(concat(ts_text@concat4("to-silica: region ", ts_pool@region_label(state.r), " refused a record: ", atom_name(why)), ""));
+            case why == :full of {
+                true -> (:no_reply, on_full(state));
+                false -> (:no_reply, state)
+            }
+        };
+        (:read_failed, why: atom) -> {
+            _: atom <- ts_out@complain(ts_text@concat4("to-silica: region ", ts_pool@region_label(state.r), " could not replay: ", atom_name(why)));
+            (:no_reply, on_rx_end(state))
+        };
+        (:link_down, why: atom) -> (:no_reply, on_link_down(why, state));
+        (:lease, slot: int64, token: int64, hop: int64, hello: string) -> (:no_reply, on_lease(slot, token, hop, hello, state));
+        (:resume, slot: int64, token: int64, id: string, hello: string) -> (:no_reply, on_resume(slot, token, id, hello, state));
+        (:put, slot: int64, schema: int64, etf: string) -> case attached(slot, state) of {
+            false -> (:no_reply, state);
+            true -> {
+                n: int64 <- ts_region@append(state.car, schema, etf);
+                (:no_reply, ts_region@own(state, ts_region@io_next(state.io, state.io.next + n), state.job))
+            }
+        };
+        (:mark, slot: int64, seq: int64) -> case attached(slot, state) of {
+            false -> (:no_reply, state);
+            true -> (:no_reply, ts_region@sync_for(state, seq))
+        };
+        (:finish, slot: int64, rejected: int64, frames: int64, miscounts: int64) -> case attached(slot, state) of {
+            false -> (:no_reply, state);
+            true -> (:no_reply, on_finish(rejected, frames, miscounts, state))
+        };
+        (:drop, slot: int64, reason: string) -> case attached(slot, state) of {
+            false -> (:no_reply, state);
+            true -> (:no_reply, on_drop(reason, state))
+        };
+        (:detach, slot: int64) -> case state.job.slot == slot of {
+            false -> (:no_reply, state);
+            true -> (:no_reply, on_detach(state))
+        };
+        (:more, slot: int64) -> case state.io.mode == 2 and state.job.slot == slot of {
+            false -> (:no_reply, state);
+            true -> (:no_reply, ts_region@grant(state))
+        };
+        (:free, slot: int64, token: int64, id: string) -> (:no_reply, on_free(slot, token, id, state));
+        (:t_boot, _r: int64) -> (:no_reply, on_t_boot(state));
+        (:t_more, attempt: int64) -> case state.io.mode == 3 and attempt == state.job.attempt of {
+            false -> (:no_reply, state);
+            true -> (:no_reply, ts_region@grant(state))
+        };
+        (:t_out, attempt: int64, path: string, content: string) -> case state.job.phase == 3 and attempt == state.job.attempt of {
+            false -> (:no_reply, state);
+            true -> {
+                _: atom <- show_output(state.job.id, path, content);
+                (:no_reply, ts_region@put_own(state, ts_records@output_file_etf(path, content)))
+            }
+        };
+        (:t_done, attempt: int64, status: atom, units: int64, gaps: int64, files: int64, diag: string) -> case state.job.phase == 3 and attempt == state.job.attempt and length_bytes(state.job.pending) == 0 of {
+            false -> (:no_reply, state);
+            true -> (:no_reply, finishing(state, status, { units: units, gaps: gaps, rejected: state.job.tally.rejected }, files, diag))
+        }
+    }
+}
+
+fn flags(count: int64) -> $FLAGS$ {
+    { strategy: :one_for_one, allowed_restart_count: count, restarts_time_frame: 10 }
+}
+
+// The store owners: one_for_one, at most 3 restarts in 10 seconds.
+fn init(initial_state: int64) -> $OWNER_SUP$ {
+    sequence proc[mem(normal)]
+        f: $FLAGS$ <- flags(3);
+        children: $OWNER_SPECS$ <- [
+$STORE_CHILDREN$
+        ]
+    produces
+        pure (f, children)
+    end
+}
+
+// What the root supervisor names as this supervisor's behaviour (a child supervisor of another unit must be a
+// unit's own Supervisor implementation).
+fn store_sup(initial_state: int64) -> $OWNER_SUP$ {
+    init(initial_state)
+}

@@ -1,0 +1,232 @@
+// dangerous_to_silica: the to-silica transpiler's root unit (app design 3): every actor, its supervisor, and main.
+// It starts (:tcp) carriers and, with a (:backing) store, store carriers, both dangerous actors, hence the unit's
+// name (Silica E4021).
+//
+// Source file: dangerous_to_silica.silica.in; the $NAME$ placeholders are spelled out by
+// silica-sink/tools/expand.py, the pools' sizes and the store's medium included.
+//
+// THE TREE (app design 3)
+//   main ── reporter (the FailureReporter), warden (the supervisors' report sink); neither can be supervised
+//    └─ :ts_root, one_for_one
+//        ├─ :ts_port_sup       :ts_port_<r>       one port per region: it owns the region's store carrier
+//        ├─ :ts_store_sup      :ts_store_<r>      one store owner per region, permanent
+//        ├─ :ts_transpile_sup  :ts_transpile_<r>  one transpile actor per region, permanent, idle between sessions
+//        ├─ :ts_session_sup    :ts_session_<i>    the pool of session actors, permanent, idle between connections
+//        └─ :ts_listener_sup   :ts_listener       the listener owner, permanent
+// Every child is static and is addressed by its child id (a registered name), so a restarted actor is reached
+// under the same name and nothing holds a reference that a restart makes stale.
+//
+// RESTARTS. A supervisor restarts a failed child from its initial state. A restarted actor does nothing until a
+// message reaches it, so the warden sends every restarted child (:boot, 0):
+//   session actor     its connection and its place in the session are gone; it tells every store owner
+//                     (:detach, slot), which keeps the session resumable (contract T6.5), and is idle again
+//   transpile actor   tells its store owner (:t_boot, r); the owner starts a new attempt from the session's first
+//                     record (app design 3.4), at most ts_config@transpile_attempts() times
+//   store owner       starts a new carrier on its region and recovers what the region holds (app design 4.3).
+//                     On a (:backing) region the old carrier still holds the lock, the open is refused :in_use,
+//                     and the transpiler exits (status 1): the next start recovers the region from its backing
+//   listener owner    binds the port again; if it cannot, the transpiler exits (status 1)
+// A child supervisor that ends (its restart limit was passed) ends the transpiler with status 70: what is durable
+// in the regions is found again at the next start.
+//
+// MESSAGES between the actors (all casts by name; every message is a tagged tuple):
+//   session -> store owner   (:lease, slot, token, hop, hello)  (:resume, slot, token, id, hello)
+//                            (:put, slot, schema, etf)  (:mark, slot, seq)  (:finish, slot, rejected, frames, miscounts)
+//                            (:drop, slot, reason)  (:detach, slot)  (:more, slot)  (:free, slot, token, id)
+//   store owner -> session   (:store, token, kind, text, n)   kind: leased, ended, busy, unknown, mismatch, stored,
+//                            result, full, freed, not_freed;   (:rebuild, token, schema, record)
+//   store owner -> transpile (:t_start, attempt, id)  (:t_record, attempt, frame)  (:t_end, attempt)
+//   transpile -> store owner (:t_boot, r)  (:t_more, attempt)  (:t_out, attempt, path, content)
+//                            (:t_done, attempt, status, units, gaps, files, diagnostics)
+module dangerous_to_silica;
+
+use Supervisor;
+use wire_etf;
+use wireframe;
+use Carrier;
+use dangerous_sockets;
+use dangerous_tcp_carrier;
+use ts_text;
+use ts_out;
+use ts_config;
+use ts_pool;
+use ts_reply;
+use dangerous_ts_session;
+use dangerous_ts_port;
+use ts_actor_store;
+use ts_actor_transpile;
+
+impl TsRoot for Supervisor;
+
+fn region_dump_limit() -> int64 {
+    0
+}
+
+// The FailureReporter. An orderly end (reason :normal) is not worth a line; anything else is written to stderr.
+fn reporter(report: string, state: int64) -> (:no_reply, int64) {
+    sequence proc[device_io]
+        _: atom <- case contains(report, ":normal") of {
+            true -> :ok;
+            false -> println_stderr(report)
+        }
+    produces
+        pure (:no_reply, state)
+    end
+}
+
+fn no_conns() -> $CONNS$ {
+    sequence proc[mem(normal)]
+        out: $CONNS$ <- empty[dangerous_actor_ref, mem(normal)]()
+    produces
+        pure out
+    end
+}
+
+fn one_conn(c: dangerous_actor_ref) -> $CONNS$ {
+    sequence proc[mem(normal)]
+        out: $CONNS$ <- prepend[dangerous_actor_ref, mem(normal)](c, no_conns())
+    produces
+        pure out
+    end
+}
+
+// ------------------------------------------------------------------ the listener owner (app design 3.1)
+
+fn start_listener() -> dangerous_actor_ref {
+    sequence proc[concurrency]
+        lst: dangerous_actor_ref <- spawn_dangerous({ owner: actor_ref_of_word(0), fd: 0 - 1, rx_credit: 0, up: false, listening: false, link_spec: "" }, dangerous_tcp_carrier@carrier, stack_policy(0, :keep_last_message), state_policy(:keep_state_area));
+        _: boolean <- cast(lst, (:open, self(), ts_config@listen_address()) impl ActorMessage {})
+    produces
+        pure lst
+    end
+}
+
+fn hand_to_session(conn: dangerous_actor_ref, n: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@session_name(n % ts_pool@sessions()), (:adopt, conn, n, 0) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+// Owns the (:tcp) listener and hands each accepted connection to a session actor of the pool; a busy session actor
+// passes it on, and a connection no session actor can take is closed.
+fn listener(msg: $LISTENER_EVENT$, state: $LISTENER_STATE$) -> (:no_reply, $LISTENER_STATE$) {
+    case msg of {
+        (:boot, _z: int64) -> (:no_reply, { lst: one_conn(start_listener()), accepted: state.accepted });
+        (:link_up, info: string) -> {
+            _: atom <- ts_out@say(concat("to-silica: listening on 127.0.0.1 ", info));
+            (:no_reply, state)
+        };
+        (:accepted, conn: dangerous_actor_ref, _info: string) -> {
+            n: int64 <- state.accepted + 1;
+            _: boolean <- hand_to_session(conn, n);
+            (:no_reply, { lst: state.lst, accepted: n })
+        };
+        (:rx, _segment: string) -> (:no_reply, state);
+        (:tx_credit, _n: int64) -> (:no_reply, state);
+        (:tx_failed, _why: atom) -> (:no_reply, state);
+        (:link_down, why: atom) -> {
+            _: atom <- ts_out@complain(concat("to-silica: the listener is down: ", atom_name(why)));
+            _: boolean <- ts_out@leave(1);
+            (:no_reply, state)
+        }
+    }
+}
+
+// ------------------------------------------------------------------ supervisors (app design 3)
+
+fn flags(count: int64) -> $FLAGS$ {
+    { strategy: :one_for_one, allowed_restart_count: count, restarts_time_frame: 10 }
+}
+
+fn listener_sup(initial_state: int64) -> $LISTENER_SUP$ {
+    sequence proc[mem(normal)]
+        f: $FLAGS$ <- flags(3);
+        children: $LISTENER_SPECS$ <- [
+            { id: :ts_listener, agent_type: :worker, initial_state: { lst: no_conns(), accepted: 0 }, behavior: listener, restart: :permanent, shutdown: 0, flavor: :plain, state_policy: state_policy(:keep_state_area) }
+        ]
+    produces
+        pure (f, children)
+    end
+}
+
+// The root supervisor has no child of its own list: main adds the four child supervisors, whose children have
+// four different types (a child list has one type; :add_child takes each as it is).
+fn init(initial_state: int64) -> $LISTENER_SUP$ {
+    sequence proc[mem(normal)]
+        f: $FLAGS$ <- flags(1);
+        children: $LISTENER_SPECS$ <- []
+    produces
+        pure (f, children)
+    end
+}
+
+fn is_supervisor(id: atom) -> boolean {
+    id == :ts_port_sup or id == :ts_store_sup or id == :ts_transpile_sup or id == :ts_session_sup or id == :ts_listener_sup
+}
+
+// The supervisors' report sink (Silica specification 15.4.10.5). A restarted child is sent (:boot, 0) through a
+// timer of no delay, which, unlike a cast, cannot end the warden when the child has ended again. A child
+// supervisor that ended has passed its restart limit: the transpiler ends.
+fn warden(r: $EXIT_REPORT$, state: int64) -> (:no_reply, int64) {
+    case is_supervisor(r.child_id) of {
+        true -> {
+            _: atom <- ts_out@complain(ts_text@concat3("to-silica: the supervisor ", atom_name(r.child_id), " ended (its restart limit was passed); the transpiler ends"));
+            _: boolean <- ts_out@leave(70);
+            (:no_reply, state)
+        };
+        false -> case r.restarted of {
+            false -> (:no_reply, state);
+            true -> {
+                sequence proc[concurrency, device_io]
+                    _: atom <- println(concat("to-silica: restarted ", atom_name(r.child_id)));
+                    _: timer_ref <- send_after(0, r.new_child, (:boot, 0) impl ActorMessage {})
+                produces
+                    pure (:no_reply, state + 1)
+                end
+            }
+        }
+    }
+}
+
+fn boot_stores(r: int64) -> boolean {
+    case r >= ts_pool@regions() of {
+        true -> true;
+        false -> {
+            sequence proc[concurrency]
+                _: boolean <- cast_registered(ts_pool@store_name(r), (:boot, 0) impl ActorMessage {})
+            produces
+                pure boot_stores(r + 1)
+            end
+        }
+    }
+}
+
+fn main() -> int64 {
+    sequence proc[concurrency, device_io]
+        rep: actor_ref <- spawn(0, reporter, stack_policy(0, :keep_last_message), state_policy(:keep_state_area));
+        _: atom <- register_failure_reporter(rep);
+        w: actor_ref <- spawn(0, warden, stack_policy(0, :keep_last_message), state_policy(:keep_state_area));
+        root: supervisor_ref <- spawn_registered_supervisor(TsRoot, 0, :ts_root, stack_policy(0, :keep_last_message), state_policy(:keep_state_area));
+        _: $SUP_REPLY$ <- call_supervisor(root, { op: :set_report_sink, sink: w } impl SupervisorMessage {});
+        _: $SUP_REPLY$ <- call_supervisor(root, { op: :add_child, child: { id: :ts_port_sup, agent_type: :supervisor, initial_state: 0, behavior: dangerous_ts_port@port_sup, restart: :temporary, shutdown: 0, flavor: :plain, state_policy: state_policy(:keep_state_area) } } impl SupervisorMessage {});
+        _: $SUP_REPLY$ <- call_supervisor(root, { op: :add_child, child: { id: :ts_store_sup, agent_type: :supervisor, initial_state: 0, behavior: ts_actor_store@store_sup, restart: :temporary, shutdown: 0, flavor: :plain, state_policy: state_policy(:keep_state_area) } } impl SupervisorMessage {});
+        _: $SUP_REPLY$ <- call_supervisor(root, { op: :add_child, child: { id: :ts_transpile_sup, agent_type: :supervisor, initial_state: 0, behavior: ts_actor_transpile@transpile_sup, restart: :temporary, shutdown: 0, flavor: :plain, state_policy: state_policy(:keep_state_area) } } impl SupervisorMessage {});
+        _: $SUP_REPLY$ <- call_supervisor(root, { op: :add_child, child: { id: :ts_session_sup, agent_type: :supervisor, initial_state: 0, behavior: dangerous_ts_session@session_sup, restart: :temporary, shutdown: 0, flavor: :plain, state_policy: state_policy(:keep_state_area) } } impl SupervisorMessage {});
+        _: $SUP_REPLY$ <- call_supervisor(root, { op: :add_child, child: { id: :ts_listener_sup, agent_type: :supervisor, initial_state: 0, behavior: listener_sup, restart: :temporary, shutdown: 0, flavor: :plain, state_policy: state_policy(:keep_state_area) } } impl SupervisorMessage {});
+        _: boolean <- boot_stores(0);
+        _: boolean <- cast_registered(:ts_listener, (:boot, 0) impl ActorMessage {});
+        code: int64 <- wait_for_exit();
+        _: boolean <- case code == 0 of {
+            true -> cast_registered(ts_pool@store_name(0), (:shutdown, 0) impl ActorMessage {});
+            false -> true
+        };
+        last: int64 <- case code == 0 of {
+            true -> wait_for_exit();
+            false -> code
+        }
+    produces
+        pure last
+    end
+}

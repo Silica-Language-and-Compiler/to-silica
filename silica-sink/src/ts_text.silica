@@ -1,0 +1,129 @@
+// ts_text: small text helpers of the to-silica transpiler. Pure Silica, no placeholders (not generated).
+//
+// Silica has no integer-to-text builtin (specification section 22, implementation status), so itoa is written here
+// over division and a ten-character lookup (app design 6.5).
+module ts_text;
+
+export itoa/1;
+export atoi/1;
+export find/3;
+export fresh/1;
+export is_identifier/1;
+export concat3/3;
+export concat4/4;
+
+fn digit(d: int64) -> string {
+    substring("0123456789", d, d + 1)
+}
+
+fn itoa_pos(n: int64) -> string {
+    case n < 10 of {
+        true -> digit(n);
+        false -> concat(itoa_pos(n / 10), digit(n % 10))
+    }
+}
+
+// Decimal text of n. (The most negative int64 is not handled: its negation overflows.)
+fn itoa(n: int64) -> string {
+    case n < 0 of {
+        true -> concat("-", itoa_pos(0 - n));
+        false -> itoa_pos(n)
+    }
+}
+
+fn concat3(a: string, b: string, c: string) -> string {
+    concat(a, concat(b, c))
+}
+
+fn concat4(a: string, b: string, c: string, d: string) -> string {
+    concat(concat(a, b), concat(c, d))
+}
+
+fn at(s: string, i: int64) -> int64 {
+    sequence proc[transport]
+        b: int64 <- byte_at(s, i)
+    produces
+        pure b
+    end
+}
+
+fn is_letter(b: int64) -> boolean {
+    (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95
+}
+
+fn is_digit(b: int64) -> boolean {
+    b >= 48 and b <= 57
+}
+
+fn rest_is_identifier(s: string, i: int64, n: int64) -> boolean {
+    case i >= n of {
+        true -> true;
+        false -> {
+            b: int64 <- at(s, i);
+            case is_letter(b) or is_digit(b) of {
+                true -> rest_is_identifier(s, i + 1, n);
+                false -> false
+            }
+        }
+    }
+}
+
+// True when s is letters, digits and '_' only, is not empty and does not start with a digit (contract T5.2).
+fn is_identifier(s: string) -> boolean {
+    n: int64 <- length_bytes(s);
+    case n == 0 of {
+        true -> false;
+        false -> case is_letter(at(s, 0)) of {
+            true -> rest_is_identifier(s, 1, n);
+            false -> false
+        }
+    }
+}
+
+fn atoi_from(s: string, i: int64, n: int64, acc: int64) -> int64 {
+    case i >= n of {
+        true -> acc;
+        false -> {
+            b: int64 <- at(s, i);
+            case is_digit(b) and acc < 100000000000000000 of {
+                true -> atoi_from(s, i + 1, n, acc * 10 + (b - 48));
+                false -> 0 - 1
+            }
+        }
+    }
+}
+
+// The number a text of decimal digits spells, or -1 when it is empty, too long or holds anything else.
+fn atoi(s: string) -> int64 {
+    n: int64 <- length_bytes(s);
+    case n == 0 of {
+        true -> 0 - 1;
+        false -> atoi_from(s, 0, n, 0)
+    }
+}
+
+// The position of the first key in s at or after i, or -1.
+fn find(s: string, key: string, i: int64) -> int64 {
+    case i + length_bytes(key) > length_bytes(s) of {
+        true -> 0 - 1;
+        false -> case substring(s, i, i + length_bytes(key)) == key of {
+            true -> i;
+            false -> find(s, key, i + 1)
+        }
+    }
+}
+
+// A new string with the bytes of s, sharing no memory with s. An actor uses it on every string it takes out of a
+// message (a received segment, what wireframe leaves pending of it, a field of a value decoded from it) before it
+// keeps the string in its state: a state that held such a string, an empty one included, ended the actor at the end
+// of the dispatch or at its next message (limitation observed, STATUS.md).
+fn fresh(s: string) -> string {
+    n: int64 <- length_bytes(s);
+    case n < 2 of {
+        true -> case n == 0 of {
+            true -> "";
+            false -> substring(concat(s, "."), 0, 1)
+        };
+        false -> concat(substring(s, 0, 1), substring(s, 1, n))
+    }
+}

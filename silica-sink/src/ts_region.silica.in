@@ -1,0 +1,311 @@
+// ts_region: what a store owner (ts_actor_store) does to its region and to the other actors: the commands to the
+// region's port (dangerous_ts_port, which owns the store carrier), appending a record, the messages to the session
+// and transpile actors, and the owner's state with its small changes. It is a unit of its own only to keep each
+// unit within what one compiler run can hold (STATUS.md, "Compiler memory").
+//
+// Source file: ts_region.silica.in; the $NAME$ placeholders are spelled out by silica-sink/tools/expand.py.
+module ts_region;
+
+use wire_etf;
+use wireframe;
+use Carrier;
+use ts_pool;
+use ts_records;
+
+export no_waits/0;
+export push_wait/2;
+export idle_job/0;
+export owner_initial/1;
+export car_tx/2;
+export car_sync/1;
+export car_read/2;
+export car_read_stop/1;
+export car_credit/1;
+export car_trim/2;
+export car_close/1;
+export car_boot/1;
+export append/3;
+export tell/5;
+export tell_rebuild/4;
+export t_start/3;
+export t_record/3;
+export t_end/2;
+export own/3;
+export own_rx/2;
+export io_next/2;
+export io_waits/2;
+export io_mode/3;
+export io_free/3;
+export job_phase/2;
+export job_attached/4;
+export job_attempt/2;
+export job_done/3;
+export put_own/2;
+export sync_for/2;
+export grant/1;
+export begin_read/3;
+export took/1;
+export window/1;
+
+fn no_waits() -> $LI$ {
+    sequence proc[mem(normal)]
+        out: $LI$ <- empty[int64, mem(normal)]()
+    produces
+        pure out
+    end
+}
+
+fn push_wait(ws: $LI$, code: int64) -> $LI$ {
+    case ws of {
+        []: $LI$ -> {
+            sequence proc[mem(normal)]
+                out: $LI$ <- prepend[int64, mem(normal)](code, no_waits())
+            produces
+                pure out
+            end
+        };
+        [w: int64, t: $LI$] -> {
+            sequence proc[mem(normal)]
+                rest: $LI$ <- push_wait(t, code);
+                out: $LI$ <- prepend[int64, mem(normal)](w, rest)
+            produces
+                pure out
+            end
+        }
+    }
+}
+
+fn idle_job() -> $JOB$ {
+    { phase: 0, slot: 0 - 1, token: 0, id: "", base: 0, hello: "", attempt: 0, tally: { rejected: 0, frames: 0, miscounts: 0 }, result: "", pending: "" }
+}
+
+fn owner_initial(r: int64) -> $OWNER_STATE$ {
+    { car: r, r: r, rx: wireframe@fresh(Carrier@boundaries(:store)),
+      io: { up: false, closing: false, next: 0, oldest: 0, rx_credit: 0, waits: no_waits(), mode: 0, free_slot: 0 - 1, free_token: 0 },
+      job: idle_job() }
+}
+
+fn car_tx(r: int64, seg: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_tx, seg) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_sync(r: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_sync, 0) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_read(r: int64, from: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_read, from) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_read_stop(r: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_read_stop, 0) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_credits(r: int64, n: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_credit, n) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_credit(r: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_credit, 1) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_trim(r: int64, upto: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_trim, upto) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_close(r: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_close, 0) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn car_boot(r: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@port_name(r), (:p_boot, 0) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn tx_segments(cs: int64, segs: $LS$, n: int64) -> int64 {
+    case segs of {
+        []: $LS$ -> n;
+        [seg: string, t: $LS$] -> {
+            _: boolean <- car_tx(cs, seg);
+            tx_segments(cs, t, n + 1)
+        }
+    }
+}
+
+// Appends one value's bytes to the region as a stored record (app design 4.1): wireframe@record with the ETF
+// format id and the schema number, cut into the store's records by wireframe's :storage mode. Answers how many
+// store records it took.
+fn append(cs: int64, schema: int64, etf: string) -> int64 {
+    tx_segments(cs, wireframe@frame(wireframe@record(:etf, schema, etf), Carrier@mtu(:store), Carrier@boundaries(:store)), 0)
+}
+
+// To the session actor in slot (nothing when the job is detached).
+fn tell(slot: int64, token: int64, kind: atom, text: string, num: int64) -> boolean {
+    case slot < 0 of {
+        true -> false;
+        false -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@session_name(slot), (:store, token, kind, text, num) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn tell_rebuild(slot: int64, token: int64, schema: int64, record: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@session_name(slot), (:rebuild, token, schema, record) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn t_start(r: int64, attempt: int64, id: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@transpile_name(r), (:t_start, attempt, id) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn t_record(r: int64, attempt: int64, frame: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@transpile_name(r), (:t_record, attempt, frame) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn t_end(r: int64, attempt: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@transpile_name(r), (:t_end, attempt) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn own(state: $OWNER_STATE$, io: $OWNER_IO$, job: $JOB$) -> $OWNER_STATE$ {
+    { car: state.car, r: state.r, rx: state.rx, io: io, job: job }
+}
+
+fn own_rx(state: $OWNER_STATE$, rx: $RX$) -> $OWNER_STATE$ {
+    { car: state.car, r: state.r, rx: rx, io: state.io, job: state.job }
+}
+
+fn io_next(io: $OWNER_IO$, next: int64) -> $OWNER_IO$ {
+    { up: io.up, closing: io.closing, next: next, oldest: io.oldest, rx_credit: io.rx_credit, waits: io.waits, mode: io.mode, free_slot: io.free_slot, free_token: io.free_token }
+}
+
+fn io_waits(io: $OWNER_IO$, waits: $LI$) -> $OWNER_IO$ {
+    { up: io.up, closing: io.closing, next: io.next, oldest: io.oldest, rx_credit: io.rx_credit, waits: waits, mode: io.mode, free_slot: io.free_slot, free_token: io.free_token }
+}
+
+fn io_mode(io: $OWNER_IO$, mode: int64, rx_credit: int64) -> $OWNER_IO$ {
+    { up: io.up, closing: io.closing, next: io.next, oldest: io.oldest, rx_credit: rx_credit, waits: io.waits, mode: mode, free_slot: io.free_slot, free_token: io.free_token }
+}
+
+fn io_free(io: $OWNER_IO$, slot: int64, token: int64) -> $OWNER_IO$ {
+    { up: io.up, closing: io.closing, next: io.next, oldest: io.oldest, rx_credit: io.rx_credit, waits: io.waits, mode: io.mode, free_slot: slot, free_token: token }
+}
+
+fn job_phase(job: $JOB$, phase: int64) -> $JOB$ {
+    { phase: phase, slot: job.slot, token: job.token, id: job.id, base: job.base, hello: job.hello, attempt: job.attempt, tally: job.tally, result: job.result, pending: job.pending }
+}
+
+fn job_attached(job: $JOB$, phase: int64, slot: int64, token: int64) -> $JOB$ {
+    { phase: phase, slot: slot, token: token, id: job.id, base: job.base, hello: job.hello, attempt: job.attempt, tally: job.tally, result: job.result, pending: job.pending }
+}
+
+fn job_attempt(job: $JOB$, attempt: int64) -> $JOB$ {
+    { phase: job.phase, slot: job.slot, token: job.token, id: job.id, base: job.base, hello: job.hello, attempt: attempt, tally: job.tally, result: job.result, pending: job.pending }
+}
+
+fn job_done(job: $JOB$, result: string, pending: string) -> $JOB$ {
+    { phase: job.phase, slot: job.slot, token: job.token, id: job.id, base: job.base, hello: job.hello, attempt: job.attempt, tally: job.tally, result: result, pending: pending }
+}
+
+// Appends an own record and counts it.
+fn put_own(state: $OWNER_STATE$, etf: string) -> $OWNER_STATE$ {
+    n: int64 <- append(state.car, ts_records@own_schema(), etf);
+    own(state, io_next(state.io, state.io.next + n), state.job)
+}
+
+// Asks the store to make everything durable; code says what the answer is for (io.waits).
+fn sync_for(state: $OWNER_STATE$, code: int64) -> $OWNER_STATE$ {
+    _: boolean <- car_sync(state.car);
+    own(state, io_waits(state.io, push_wait(state.io.waits, code)), state.job)
+}
+
+// One more receive credit to the store.
+fn grant(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    _: boolean <- car_credit(state.car);
+    own(state, io_mode(state.io, state.io.mode, state.io.rx_credit + 1), state.job)
+}
+
+// How many records of a replay may be on their way at once: ONE, whatever the replay is for (io.mode).
+// Why: a cast to an ended actor ends the sender (limitation observed), and a transpile actor that fails on a
+// record is gone until its supervisor has restarted it. With a window of records on their way, the owner cast the
+// records after the fatal one to the ended actor and ended itself; whether it did was a matter of timing (it did
+// not with compiler 999919 and did with 999916, 2026-11-13). With one record on its way the owner casts the next
+// only after (:t_more, ...), which a failed actor never sends. The window is one for every mode because credit a
+// replay leaves unused stays with the store for the next replay (begin_read). It costs nothing measured: a record
+// took some 30 ms to come from a (:backing) region with a window of 32 as with one (STATUS.md).
+fn window(_mode: int64) -> int64 {
+    1
+}
+
+// One record of a replay has arrived: one credit less is out.
+fn took(state: $OWNER_STATE$) -> $OWNER_STATE$ {
+    own(state, io_mode(state.io, state.io.mode, state.io.rx_credit - 1), state.job)
+}
+
+// Starts a replay from store record `from` (one at a time: the callers see to it that none is in progress) and
+// gives the store its window of receive credit, less what an earlier replay left unused.
+fn begin_read(state: $OWNER_STATE$, from: int64, mode: int64) -> $OWNER_STATE$ {
+    _: boolean <- car_read(state.car, from);
+    _: boolean <- case state.io.rx_credit < window(mode) of {
+        true -> car_credits(state.car, window(mode) - state.io.rx_credit);
+        false -> true
+    };
+    credit: int64 <- case state.io.rx_credit < window(mode) of {
+        true -> window(mode);
+        false -> state.io.rx_credit
+    };
+    { car: state.car, r: state.r, rx: wireframe@fresh(Carrier@boundaries(:store)), io: io_mode(state.io, mode, credit), job: state.job }
+}

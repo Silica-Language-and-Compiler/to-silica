@@ -1,0 +1,19 @@
+// INTERFACE ONLY (silica-sink/build.sh, "why several compiler runs"): the exported signatures of ts_intake with no
+// body worth the name, for the compiler run that compiles the actors. The linked program holds the real ts_intake.
+// build.sh checks that every `fn` line here is also in the real unit.
+module ts_intake;
+
+export digest/4;
+
+fn digest(d: $DECODED$, silica: boolean, mode: atom, decls: string) -> $DIGEST$ {
+    case d of {
+        (:rejected, why: atom) -> answer(why, silica, decls);
+        (:ok, _m: $TO_TRANSPILER$) -> answer(mode, silica, decls)
+    }
+}
+
+fn answer(kind: atom, silica: boolean, decls: string) -> $DIGEST$ {
+    { kind: kind, seq: 0, name: "", text: "", count: 0, check: { reason: :ok, where: "", gaps: 0 },
+      flags: { silica: silica, check_mode: false }, keep: "",
+      printed: { ok: false, stub: false, exports: "", text: "", sig: "", code: "", why: "", at: { file: "", line: 0, column: 0 }, decl: decls } }
+}

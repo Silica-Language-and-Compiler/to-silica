@@ -1,0 +1,6 @@
+{welcome,#{credit => 64,max_frame => 1048576,resume_from => 0}}.
+{rejected,0,missing_field}.
+{rejected,1,unknown_field}.
+{rejected,2,bad_variant}.
+{rejected,4,bad_tag}.
+{result,failed,#{rejected => 4,units => 1,gaps => 0},0}.

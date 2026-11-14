@@ -1,0 +1,5 @@
+{welcome,#{credit => 64,max_frame => 1048576,resume_from => 0}}.
+{rejected,0,bad_unit_name}.
+{rejected,1,bad_unit_name}.
+{rejected,4,bad_unit_name}.
+{result,failed,#{rejected => 3,units => 1,gaps => 0},0}.

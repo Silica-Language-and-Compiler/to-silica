@@ -1,0 +1,4 @@
+{welcome,#{credit => 64,max_frame => 1048576,resume_from => 0}}.
+{diagnostic,2,<<"T1002">>}.
+{diagnostic,3,<<"T1002">>}.
+{result,failed,#{rejected => 0,units => 1,gaps => 0},0}.

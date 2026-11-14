@@ -1,0 +1,237 @@
+// ---------------------------------------------------------------- the process runtime, written by to-silica
+// (app design 5.5). Every process of this unit is one Silica actor with the behaviour to_silica_actor and one
+// state type (BEES A4.3 uniform_shape), a child of the supervisor :@UNIT@_sup (BEES A4.1) with a child id from a
+// pool of @POOL@ (BEES A4.2 single_pool), or a STATIC CHILD: a child the supervisor's init lists, with a child id
+// the sender chose, under which Silica registers it (contract T9.14b; BEES A4.4). Its state is the phase it waits in with the variables that are live
+// there (BEES A3.3 phase_field), and k: the number of its current timed wait, and the actor its result is
+// reported to (none for a process the program itself spawned).
+fn to_silica_send(to: actor_ref, m: <M>) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast(to, m impl ActorMessage {})
+    produces pure b end
+}
+// A send to a registered name (contract H39, T9.14c): the name of a static child. With no process registered
+// under the name the sender ends (BEES A5.4 accept_sender_death).
+fn to_silica_send_named(to: atom, m: <M>) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(to, m impl ActorMessage {})
+    produces pure b end
+}
+// A static child's (:register) node, where the program reaches it (contract T9.14b): the child has been in the
+// supervisor's child list since the supervisor started; here it is sent its start message, so it runs to its
+// first receive (a child that has started takes no notice of it). The value is true.
+fn to_silica_static(name: atom) -> boolean {
+    sequence proc[concurrency]
+        _: boolean <- cast_registered(name, (:to_silica_go, 0) impl ActorMessage {})
+    produces pure true end
+}
+fn to_silica_self() -> actor_ref {
+    sequence proc[concurrency]
+        a: actor_ref <- self()
+    produces pure a end
+}
+// A receive with a timeout (BEES A3.7): the timeout message carries the number of its wait, and a timeout whose
+// number is not the current wait's is not taken.
+fn to_silica_arm(ms: int64, w: int64) -> int64 {
+    sequence proc[concurrency]
+        _: timer_ref <- send_after(to_uint64(ms), self(), (:to_silica_timeout, w) impl ActorMessage {})
+    produces pure w end
+}
+fn to_silica_is_go(msg: <M>) -> boolean {
+    case msg of {
+        (:to_silica_go, _z: int64) -> true;
+        _: <M> -> false
+    }
+}
+// The value a process ends with goes to the actor that asked for it with <function>__spawn_watched, if any.
+fn to_silica_result_int64(up: actor_ref, v: int64) -> boolean {
+    case actor_ref_bits(up) == 0 of {
+        true -> true;
+        false -> to_silica_send(up, (:to_silica_result_int64, v))
+    }
+}
+fn to_silica_result_float64(up: actor_ref, v: float64) -> boolean {
+    case actor_ref_bits(up) == 0 of {
+        true -> true;
+        false -> to_silica_send(up, (:to_silica_result_float64, v))
+    }
+}
+fn to_silica_result_boolean(up: actor_ref, v: boolean) -> boolean {
+    case actor_ref_bits(up) == 0 of {
+        true -> true;
+        false -> to_silica_send(up, (:to_silica_result_boolean, v))
+    }
+}
+fn to_silica_result_atom(up: actor_ref, v: atom) -> boolean {
+    case actor_ref_bits(up) == 0 of {
+        true -> true;
+        false -> to_silica_send(up, (:to_silica_result_atom, v))
+    }
+}
+fn to_silica_result_string(up: actor_ref, v: string) -> boolean {
+    case actor_ref_bits(up) == 0 of {
+        true -> true;
+        false -> to_silica_send(up, (:to_silica_result_string, v))
+    }
+}
+// One message against the phase a process is in.
+fn to_silica_dispatch(msg: <M>, ph: <P>, k: { wait: int64, up: actor_ref }) -> <S> {
+    case ph of {
+        @ARMS@_: <P> -> { ph: ph, k: k }
+    }
+}
+// One message for a process. A message that no clause of the waiting receive takes is DROPPED (the source
+// language keeps it for a later receive: no save queue is written yet). A process that has not started (it was
+// restarted by the supervisor) runs to its first receive before it takes the message.
+fn to_silica_step(msg: <M>, state: <S>) -> <S> {
+    r: <S> <- to_silica_dispatch(msg, state.ph, state.k);
+    case r.ph of {
+        (:to_silica_nomatch, _z: int64) -> state;
+        (:to_silica_unstarted, _z: int64) -> to_silica_step(msg, to_silica_dispatch((:to_silica_go, 0), state.ph, state.k));
+        _: <P> -> r
+    }
+}
+fn to_silica_actor(msg: <M>, state: <S>) -> (:no_reply, <S>) {
+    sequence proc[concurrency]
+        ns: <S> <- to_silica_step(msg, state);
+        _: atom <- case ns.ph of {
+            (:to_silica_done, _z: int64) -> stop_self(:normal);
+            (:to_silica_failed, why: atom) -> fail_self(why);
+            _: <P> -> :ok
+        }
+    produces pure (:no_reply, ns) end
+}
+fn init(initial_state: int64) -> ($FLAGS$, List[<C>, mem(normal)]) {
+    sequence proc[mem(normal)]
+        f: $FLAGS$ <- { strategy: :@STRATEGY@, allowed_restart_count: 100, restarts_time_frame: 10 };
+        children: List[<C>, mem(normal)] <- [@STATIC@]
+    produces pure (f, children) end
+}
+// True for the child id of a static child (contract T9.14b): its row stays in the supervisor's table when it
+// has ended.
+fn to_silica_is_static(id: atom) -> boolean {
+    @STATIC_IDS@false
+}
+@IDS@// Limitation observed: :get_child answers :child_info for an id no row holds, with a row whose id is not the id
+// asked for; so the id is compared.
+fn to_silica_held(sup: supervisor_ref, i: int64) -> boolean {
+    sequence
+        got: $SUP_REPLY$ <- call_supervisor(sup, { op: :get_child, id: to_silica_id(i) } impl SupervisorMessage {})
+    produces pure got.child_info.id == to_silica_id(i) end
+}
+// The first free child id at or after i, or -1 (BEES A4.2: one owner hands out the ids of the pool).
+fn to_silica_free(sup: supervisor_ref, i: int64, tries: int64) -> int64 {
+    case tries >= @POOL@ of {
+        true -> 0 - 1;
+        false -> case to_silica_held(sup, i % @POOL@) of {
+            false -> i % @POOL@;
+            true -> to_silica_free(sup, i + 1, tries + 1)
+        }
+    }
+}
+fn to_silica_add(sup: supervisor_ref, id: atom, ph: <P>, up: actor_ref, restart: :permanent | :temporary | :transient) -> actor_ref {
+    sequence proc[concurrency]
+        got: $SUP_REPLY$ <- call_supervisor(sup, { op: :add_child, child: { id: id, agent_type: :worker, initial_state: { ph: ph, k: { wait: 0, up: up } }, behavior: to_silica_actor, restart: restart, shutdown: 0, flavor: :plain, state_policy: state_policy(:keep_state_area) } } impl SupervisorMessage {});
+        _: boolean <- cast(got.child, (:to_silica_go, 0) impl ActorMessage {})
+    produces pure got.child end
+}
+// True when the child with the i-th id of the pool is the process `target`.
+fn to_silica_is(sup: supervisor_ref, i: int64, target: actor_ref) -> boolean {
+    sequence
+        got: $SUP_REPLY$ <- call_supervisor(sup, { op: :get_child, id: to_silica_id(i) } impl SupervisorMessage {})
+    produces pure got.child_info.id == to_silica_id(i) and actor_ref_equal(got.child_info.child, target) end
+}
+// The index in the pool of the child id of the process `target`, or -1 when it is no child (it has ended).
+fn to_silica_find(sup: supervisor_ref, target: actor_ref, i: int64) -> int64 {
+    case i >= @POOL@ of {
+        true -> 0 - 1;
+        false -> case to_silica_is(sup, i, target) of {
+            true -> i;
+            false -> to_silica_find(sup, target, i + 1)
+        }
+    }
+}
+fn to_silica_remove(sup: supervisor_ref, i: int64) -> boolean {
+    sequence
+        _: $SUP_REPLY$ <- call_supervisor(sup, { op: :remove_child, id: to_silica_id(i) } impl SupervisorMessage {})
+    produces pure true end
+}
+// An exit request to another process (BEES A5.5 supervisor_request): the unit's supervisor is asked to end the
+// child and drop its row; the child is not started again. A process that has ended already is not found, and
+// nothing is done. The child is found by asking for each id of the pool in turn (limitation observed: walking the
+// list :which_children answers faults).
+fn to_silica_end(sup: supervisor_ref, target: actor_ref) -> actor_ref {
+    i: int64 <- to_silica_find(sup, target, 0);
+    _: boolean <- case i < 0 of {
+        true -> true;
+        false -> to_silica_remove(sup, i)
+    };
+    target
+}
+// The spawner: the one owner of the child ids. A call-only actor, so a spawn answers with the new process. With
+// every id held it ends with id_pool_exhausted, and the process that asked ends with it (actor_not_found). An
+// exit request comes to it as the phase (:to_silica_exit, 0) with the process to end in `up`.
+fn to_silica_new(state: { sup: supervisor_ref, next: int64 }, m: { ph: <P>, up: actor_ref }, i: int64) -> actor_ref {
+    to_silica_add(state.sup, to_silica_id(i), m.ph, m.up, :@RESTART@)
+}
+fn to_silica_spawner(m: { ph: <P>, up: actor_ref }, state: { sup: supervisor_ref, next: int64 }) -> (:reply, actor_ref, { sup: supervisor_ref, next: int64 }) {
+    case m.ph of {
+        (:to_silica_exit, _z: int64) -> (:reply, to_silica_end(state.sup, m.up), state);
+        _: <P> -> {
+            sequence proc[concurrency]
+                i: int64 <- to_silica_free(state.sup, state.next, 0);
+                _: atom <- case i < 0 of {
+                    true -> fail_self(:id_pool_exhausted);
+                    false -> :ok
+                };
+                a: actor_ref <- to_silica_new(state, m, i)
+            produces pure (:reply, a, { sup: state.sup, next: i + 1 }) end
+        }
+    }
+}
+fn to_silica_exit(target: actor_ref) -> boolean {
+    sequence proc[concurrency]
+        _: actor_ref <- call_registered(:@UNIT@_spawner, { ph: (:to_silica_exit, 0), up: target } impl ActorMessage {})
+    produces pure true end
+}
+// The supervisor's report sink. The row of a process that has ended and is not restarted is removed, which
+// frees its id (not the row of a static child: the supervisor's static child list stays as it was written). When the entry process (child id :@UNIT@_entry) ends, the program ends.
+fn to_silica_warden(r: $EXIT_REPORT$, state: { sup: supervisor_ref }) -> (:no_reply, { sup: supervisor_ref }) {
+    case r.child_id == :@UNIT@_entry of {
+        true -> {
+            sequence proc[concurrency]
+                _: boolean <- cast_exit(0)
+            produces pure (:no_reply, { sup: state.sup }) end
+        };
+        false -> case r.restarted or to_silica_is_static(r.child_id) of {
+            true -> (:no_reply, state);
+            false -> {
+                sequence
+                    _: $SUP_REPLY$ <- call_supervisor(state.sup, { op: :remove_child, id: r.child_id } impl SupervisorMessage {})
+                produces pure (:no_reply, { sup: state.sup }) end
+            }
+        }
+    }
+}
+fn to_silica_boot() -> supervisor_ref {
+    sequence proc[concurrency]
+        sup: supervisor_ref <- spawn_registered_supervisor(@UNIT@, 0, :@UNIT@_sup, stack_policy(@RESERVE@, :@RELEASE@), state_policy(:keep_state_area));
+        w: actor_ref <- spawn({ sup: sup }, to_silica_warden, stack_policy(@RESERVE@, :@RELEASE@), state_policy(:keep_state_area));
+        _: $SUP_REPLY$ <- call_supervisor(sup, { op: :set_report_sink, sink: w } impl SupervisorMessage {});
+        _: actor_ref <- spawn_registered({ sup: sup, next: 0 }, to_silica_spawner, :@UNIT@_spawner, stack_policy(@RESERVE@, :@RELEASE@), state_policy(:keep_state_area))
+    produces pure sup end
+}
+// To be called once by a main that is not written here, after it has registered its failure reporter and before
+// any function of this unit that spawns.
+fn to_silica_start() -> boolean {
+    _: supervisor_ref <- to_silica_boot();
+    true
+}
+fn to_silica_spawn_watched(ph: <P>, up: actor_ref) -> actor_ref {
+    sequence proc[concurrency]
+        a: actor_ref <- call_registered(:@UNIT@_spawner, { ph: ph, up: up } impl ActorMessage {})
+    produces pure a end
+}
+fn to_silica_spawn(ph: <P>) -> actor_ref {
+    to_silica_spawn_watched(ph, actor_ref_of_word(0))
+}

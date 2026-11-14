@@ -1,0 +1,47 @@
+// The caller of the unit the p3_types trial generates (erl_types.silica): it prints one line for each function
+// that must have been written. run_trials.sh compares the output with expected.txt.
+use erl_types;
+
+fn int_line(n: int64) -> atom {
+    sequence proc[device_io]
+        _: atom <- print_int64(n);
+        o: atom <- println("")
+    produces
+        pure o
+    end
+}
+
+fn float_line(f: float64) -> atom {
+    sequence proc[device_io]
+        _: atom <- print_float64(f);
+        o: atom <- println("")
+    produces
+        pure o
+    end
+}
+
+fn boolean_line(b: boolean) -> atom {
+    sequence proc[device_io]
+        _: atom <- print_boolean(b);
+        o: atom <- println("")
+    produces
+        pure o
+    end
+}
+
+fn main() -> int64 {
+    _: atom <- float_line(erl_types@mean(7, 2));
+    _: atom <- int_line(erl_types@hinted(5));
+    _: atom <- int_line(erl_types@callop2(5));
+    p: { x: float64, y: float64 } <- { x: 1.5, y: 2.0 };
+    _: atom <- float_line(erl_types@norm1(p));
+    _: atom <- int_line(erl_types@first((4, 9)));
+    l: List[int64, mem(normal)] <- erl_types@three();
+    _: atom <- int_line(erl_types@sum(l));
+    _: atom <- int_line(erl_types@rnd(2.5));
+    m: float64 <- 0.0 - 3.99;
+    _: atom <- int_line(erl_types@tr(m));
+    _: atom <- float_line(erl_types@safe_div(7.0, 2.0));
+    _: atom <- boolean_line(erl_types@cmp2(1, 1.5));
+    0
+}

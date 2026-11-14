@@ -1,0 +1,320 @@
+// ts_check: the contract's checks on a decoded frame (app design 3.2, "Checking"). Pure functions over the values
+// tcp_transport_v1@decode_to_transpiler builds. Each answers :ok or the rejection reason of contract 5.4.
+//
+// Source file: ts_check.silica.in. The $NAME$ placeholders are the contract's types, spelled out by
+// silica-sink/tools/expand.py (Silica has no type aliases).
+//
+// Built in P0: hello checks (T5.6: :contract, :choices, :bad_hello; T7.1; T8.4), node tables (T9.2, T9.3: :bad_index),
+// type tables (:bad_index), hints (:bad_hint), profile (T7.10: :profile), gap counting (T9.10).
+// Not built yet: choice parameters and overrides against their requirement (T7.3, T7.7: :bad_choice), low-level
+// rules (T9.8: :low_level), a hint on a node that cannot carry one (T8.5).
+module ts_check;
+
+use ts_text;
+
+export hello_check/1;
+export body_check/2;
+
+// ------------------------------------------------------------------ hello
+
+fn count_requirement(cs: $CHOICES$, r: atom, acc: int64) -> int64 {
+    case cs of {
+        []: $CHOICES$ -> acc;
+        [c: $CHOICE$, t: $CHOICES$] -> case c.requirement == r of {
+            true -> count_requirement(t, r, acc + 1);
+            false -> count_requirement(t, r, acc)
+        }
+    }
+}
+
+fn count_choices(cs: $CHOICES$, acc: int64) -> int64 {
+    case cs of {
+        []: $CHOICES$ -> acc;
+        [_c: $CHOICE$, t: $CHOICES$] -> count_choices(t, acc + 1)
+    }
+}
+
+fn once(cs: $CHOICES$, r: atom) -> boolean {
+    count_requirement(cs, r, 0) == 1
+}
+
+// T7.1: in a :bees session exactly one choice for each of the eleven requirements; in a :silica session exactly
+// one for A3.4 and one for A6.8 and no other.
+fn choices_complete(profile: atom, cs: $CHOICES$) -> boolean {
+    case profile == :bees of {
+        true -> count_choices(cs, 0) == 11 and once(cs, :a3_2) and once(cs, :a3_3) and once(cs, :a3_4) and once(cs, :a4_2) and once(cs, :a4_3) and once(cs, :a4_4) and once(cs, :a5_1) and once(cs, :a5_4) and once(cs, :a5_5) and once(cs, :a6_8) and once(cs, :a7_1);
+        false -> count_choices(cs, 0) == 2 and once(cs, :a3_4) and once(cs, :a6_8)
+    }
+}
+
+fn any_advisory(h: $HINTPOL$) -> boolean {
+    h.proven == :advisory or h.declared == :advisory or h.inferred == :advisory
+}
+
+// :ok, or the refusal reason of contract T5.6.
+fn hello_check(h: $HELLO$) -> atom {
+    case h.contract == 1 of {
+        false -> :contract;
+        true -> case h.options.run.max_frame < 1 of {
+            true -> :bad_hello;
+            false -> case h.options.run.mode == :check and length_bytes(h.session) > 0 of {
+                true -> :bad_hello;
+                false -> case h.options.profile == :silica and any_advisory(h.options.hints) of {
+                    true -> :bad_hello;
+                    false -> case choices_complete(h.options.profile, h.options.choices) of {
+                        true -> :ok;
+                        false -> :choices
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ indices
+
+// A required child index: inside the table and below its parent (T9.2).
+fn below(c: int64, i: int64) -> boolean {
+    c >= 0 and c < i
+}
+
+// An optional child index: -1, or a required one (T9.4).
+fn below_or_none(c: int64, i: int64) -> boolean {
+    c == 0 - 1 or below(c, i)
+}
+
+fn all_below(cs: $LI$, i: int64) -> boolean {
+    case cs of {
+        []: $LI$ -> true;
+        [c: int64, t: $LI$] -> case below(c, i) of {
+            true -> all_below(t, i);
+            false -> false
+        }
+    }
+}
+
+fn pairs_below(ps: $LII$, i: int64) -> boolean {
+    case ps of {
+        []: $LII$ -> true;
+        [p: (int64, int64), t: $LII$] -> {
+            (k: int64, v: int64) <- p;
+            case below(k, i) and below(v, i) of {
+                true -> pairs_below(t, i);
+                false -> false
+            }
+        }
+    }
+}
+
+fn fields_below(fs: $LSI$, i: int64) -> boolean {
+    case fs of {
+        []: $LSI$ -> true;
+        [f: (string, int64), t: $LSI$] -> {
+            (_name: string, v: int64) <- f;
+            case below(v, i) of {
+                true -> fields_below(t, i);
+                false -> false
+            }
+        }
+    }
+}
+
+// True when every index node n (at position i) holds is in range: its location (T9.3) and its children (T9.2).
+fn node_ok(n: $NODE$, i: int64, nloc: int64) -> boolean {
+    case n of {
+        (:int, a: int64, _v: int64) -> below_or_none(a, nloc);
+        (:float, a: int64, _v: string) -> below_or_none(a, nloc);
+        (:text, a: int64, _v: string) -> below_or_none(a, nloc);
+        (:bytes, a: int64, _v: string) -> below_or_none(a, nloc);
+        (:symbol, a: int64, _v: string) -> below_or_none(a, nloc);
+        (:boolean, a: int64, _v: boolean) -> below_or_none(a, nloc);
+        (:nil, a: int64) -> below_or_none(a, nloc);
+        (:tuple, a: int64, es: $LI$) -> below_or_none(a, nloc) and all_below(es, i);
+        (:cons, a: int64, h: int64, t: int64) -> below_or_none(a, nloc) and below(h, i) and below(t, i);
+        (:list, a: int64, es: $LI$, t: int64) -> below_or_none(a, nloc) and all_below(es, i) and below_or_none(t, i);
+        (:map, a: int64, ps: $LII$, b: int64) -> below_or_none(a, nloc) and pairs_below(ps, i) and below_or_none(b, i);
+        (:record, a: int64, _name: string, fs: $LSI$, b: int64) -> below_or_none(a, nloc) and fields_below(fs, i) and below_or_none(b, i);
+        (:field, a: int64, r: int64, _name: string) -> below_or_none(a, nloc) and below(r, i);
+        (:bits, a: int64, ss: $LI$) -> below_or_none(a, nloc) and all_below(ss, i);
+        (:segment, a: int64, v: int64, size: int64, _unit: int64, _kind: :integer | :float | :binary | :utf8, _signed: boolean, _endian: :big | :little) -> below_or_none(a, nloc) and below(v, i) and below_or_none(size, i);
+        (:var, a: int64, _name: string) -> below_or_none(a, nloc);
+        (:wild, a: int64) -> below_or_none(a, nloc);
+        (:match, a: int64, p: int64, v: int64) -> below_or_none(a, nloc) and below(p, i) and below(v, i);
+        (:block, a: int64, es: $LI$) -> below_or_none(a, nloc) and all_below(es, i);
+        (:case, a: int64, s: int64, cs: $LI$) -> below_or_none(a, nloc) and below(s, i) and all_below(cs, i);
+        (:clause, a: int64, ps: $LI$, g: int64, b: int64) -> below_or_none(a, nloc) and all_below(ps, i) and below_or_none(g, i) and below(b, i);
+        (:cond, a: int64, cs: $LI$) -> below_or_none(a, nloc) and all_below(cs, i);
+        (:op, a: int64, _op: string, as: $LI$) -> below_or_none(a, nloc) and all_below(as, i);
+        (:call, a: int64, _m: string, _f: string, as: $LI$) -> below_or_none(a, nloc) and all_below(as, i);
+        (:apply, a: int64, f: int64, as: $LI$) -> below_or_none(a, nloc) and below(f, i) and all_below(as, i);
+        (:apply_mfa, a: int64, m: int64, f: int64, as: $LI$) -> below_or_none(a, nloc) and below(m, i) and below(f, i) and all_below(as, i);
+        (:fun_ref, a: int64, _m: string, _f: string, _arity: int64) -> below_or_none(a, nloc);
+        (:lambda, a: int64, cs: $LI$) -> below_or_none(a, nloc) and all_below(cs, i);
+        (:loop_hint, a: int64, b: int64) -> below_or_none(a, nloc) and below(b, i);
+        (:self, a: int64) -> below_or_none(a, nloc);
+        (:spawn, a: int64, f: int64, as: $LI$, _link: boolean) -> below_or_none(a, nloc) and below(f, i) and all_below(as, i);
+        (:send, a: int64, to: int64, m: int64) -> below_or_none(a, nloc) and below(to, i) and below(m, i);
+        (:receive, a: int64, cs: $LI$, timeout: int64, after: int64) -> below_or_none(a, nloc) and all_below(cs, i) and below_or_none(timeout, i) and below_or_none(after, i);
+        (:link, a: int64, to: int64) -> below_or_none(a, nloc) and below(to, i);
+        (:exit_signal, a: int64, to: int64, r: int64) -> below_or_none(a, nloc) and below(to, i) and below(r, i);
+        (:fail, a: int64, r: int64) -> below_or_none(a, nloc) and below(r, i);
+        (:try, a: int64, b: int64, cs: $LI$, ks: $LI$, after: int64) -> below_or_none(a, nloc) and below(b, i) and all_below(cs, i) and all_below(ks, i) and below_or_none(after, i);
+        (:register, a: int64, _name: string, p: int64) -> below_or_none(a, nloc) and below(p, i);
+        (:send_named, a: int64, _name: string, m: int64) -> below_or_none(a, nloc) and below(m, i);
+        (:gap_node, a: int64, _construct: string, _note: string) -> below_or_none(a, nloc);
+        (:sl_call, a: int64, _u: string, _f: string, as: $LI$) -> below_or_none(a, nloc) and all_below(as, i);
+        (:sl_cast, a: int64, to: int64, m: int64) -> below_or_none(a, nloc) and below(to, i) and below(m, i);
+        (:sl_spawn_child, a: int64, sup: int64, _pool: string, _behaviour: string, st: int64, _policy: $SPAWNPOL$) -> below_or_none(a, nloc) and below(sup, i) and below(st, i);
+        (:sl_fail_self, a: int64, r: int64) -> below_or_none(a, nloc) and below(r, i);
+        (:sl_stop_self, a: int64) -> below_or_none(a, nloc);
+        (:sl_phase, a: int64, _phase: int64, saved: $LI$, _resume: string) -> below_or_none(a, nloc) and all_below(saved, i);
+        (:sl_yield, a: int64, _resume: string, saved: $LI$) -> below_or_none(a, nloc) and all_below(saved, i);
+        (:sl_behaviour, a: int64, _st: int64, _mt: int64, b: int64) -> below_or_none(a, nloc) and below(b, i)
+    }
+}
+
+// :gap for a gap node (T9.10), :process for the process constructs a :silica session may not use (T7.10: H20 to
+// H25, H38, H39), :plain for every other node.
+fn node_class(n: $NODE$) -> atom {
+    case n of {
+        (:gap_node, _a: int64, _construct: string, _note: string) -> :gap;
+        (:self, _a: int64) -> :process;
+        (:spawn, _a: int64, _f: int64, _as: $LI$, _link: boolean) -> :process;
+        (:send, _a: int64, _to: int64, _m: int64) -> :process;
+        (:receive, _a: int64, _cs: $LI$, _timeout: int64, _after: int64) -> :process;
+        (:link, _a: int64, _to: int64) -> :process;
+        (:exit_signal, _a: int64, _to: int64, _r: int64) -> :process;
+        (:register, _a: int64, _name: string, _p: int64) -> :process;
+        (:send_named, _a: int64, _name: string, _m: int64) -> :process;
+        _: $NODE$ -> :plain
+    }
+}
+
+// Walks a node table from position i. Answers { reason, at, gaps }: reason :ok with at the table's length, or
+// :bad_index / :profile with at the offending position.
+fn nodes_walk(ns: $NODES$, i: int64, nloc: int64, silica: boolean, gaps: int64) -> { reason: atom, at: int64, gaps: int64 } {
+    case ns of {
+        []: $NODES$ -> { reason: :ok, at: i, gaps: gaps };
+        [n: $NODE$, t: $NODES$] -> case node_ok(n, i, nloc) of {
+            false -> { reason: :bad_index, at: i, gaps: gaps };
+            true -> {
+                class: atom <- node_class(n);
+                case class == :process and silica of {
+                    true -> { reason: :profile, at: i, gaps: gaps };
+                    false -> case class == :gap of {
+                        true -> nodes_walk(t, i + 1, nloc, silica, gaps + 1);
+                        false -> nodes_walk(t, i + 1, nloc, silica, gaps)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn type_ok(t: $TYPENODE$, i: int64) -> boolean {
+    case t of {
+        (:t_tuple, es: $LI$) -> all_below(es, i);
+        (:t_tagged, _tag: string, es: $LI$) -> all_below(es, i);
+        (:t_record, fs: $LSI$) -> fields_below(fs, i);
+        (:t_list, e: int64) -> below(e, i);
+        (:t_union, as: $LI$) -> all_below(as, i);
+        (:t_fun, ps: $LI$, r: int64) -> all_below(ps, i) and below(r, i);
+        (:t_actor, m: int64) -> below(m, i);
+        (:t_named, _name: string, as: $LI$) -> all_below(as, i);
+        _: $TYPENODE$ -> true
+    }
+}
+
+// The length of a type table whose child indices are all below their parent's, or -1 - i for a bad entry at i.
+fn types_walk(ts: $TYPES$, i: int64) -> int64 {
+    case ts of {
+        []: $TYPES$ -> i;
+        [t: $TYPENODE$, rest: $TYPES$] -> case type_ok(t, i) of {
+            true -> types_walk(rest, i + 1);
+            false -> 0 - 1 - i
+        }
+    }
+}
+
+fn count_locations(ls: $LII$, acc: int64) -> int64 {
+    case ls of {
+        []: $LII$ -> acc;
+        [_l: (int64, int64), t: $LII$] -> count_locations(t, acc + 1)
+    }
+}
+
+// The position of the first hint whose node or type index is out of range (T8.5), or -1.
+fn hints_bad(hs: $HINTS$, i: int64, nnodes: int64, ntypes: int64) -> int64 {
+    case hs of {
+        []: $HINTS$ -> 0 - 1;
+        [h: $HINT$, t: $HINTS$] -> case below_or_none(h.node, nnodes) and below(h.type, ntypes) of {
+            true -> hints_bad(t, i + 1, nnodes, ntypes);
+            false -> i
+        }
+    }
+}
+
+// The position of the first override whose node index is out of range (T7.6), or -1.
+fn overrides_bad(os: $OVERRIDES$, i: int64, nnodes: int64) -> int64 {
+    case os of {
+        []: $OVERRIDES$ -> 0 - 1;
+        [o: $OVERRIDE$, t: $OVERRIDES$] -> case below(o.node, nnodes) of {
+            true -> overrides_bad(t, i + 1, nnodes);
+            false -> i
+        }
+    }
+}
+
+fn where_at(path: string, i: int64) -> string {
+    ts_text@concat4(path, "[", ts_text@itoa(i), "]")
+}
+
+fn function_check(f: $FUNCTION$, silica: boolean) -> { reason: atom, where: string, gaps: int64 } {
+    w: { reason: atom, at: int64, gaps: int64 } <- nodes_walk(f.code.nodes, 0, count_locations(f.code.locations, 0), silica, 0);
+    case w.reason == :ok of {
+        false -> { reason: w.reason, where: where_at(".body.code.nodes", w.at), gaps: 0 };
+        true -> case all_below(f.code.clauses, w.at) of {
+            false -> { reason: :bad_index, where: ".body.code.clauses", gaps: 0 };
+            true -> {
+                ntypes: int64 <- types_walk(f.types, 0);
+                case ntypes < 0 of {
+                    true -> { reason: :bad_index, where: where_at(".body.types", 0 - 1 - ntypes), gaps: 0 };
+                    false -> {
+                        hb: int64 <- hints_bad(f.notes.hints, 0, w.at, ntypes);
+                        case hb >= 0 of {
+                            true -> { reason: :bad_hint, where: where_at(".body.notes.hints", hb), gaps: 0 };
+                            false -> {
+                                ob: int64 <- overrides_bad(f.notes.overrides, 0, w.at);
+                                case ob >= 0 of {
+                                    true -> { reason: :bad_index, where: where_at(".body.notes.overrides", ob), gaps: 0 };
+                                    false -> { reason: :ok, where: "", gaps: w.gaps }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn type_decl_check(d: $TYPEDECL$) -> { reason: atom, where: string, gaps: int64 } {
+    ntypes: int64 <- types_walk(d.types, 0);
+    case ntypes < 0 of {
+        true -> { reason: :bad_index, where: where_at(".body.types", 0 - 1 - ntypes), gaps: 0 };
+        false -> case below(d.root, ntypes) of {
+            true -> { reason: :ok, where: "", gaps: 0 };
+            false -> { reason: :bad_index, where: ".body.root", gaps: 0 }
+        }
+    }
+}
+
+// The checks on one form's body. gaps is how many gaps it holds (a gap form is one; T9.10).
+fn body_check(body: $BODY$, silica: boolean) -> { reason: atom, where: string, gaps: int64 } {
+    case body of {
+        (:function, f: $FUNCTION$) -> function_check(f, silica);
+        (:type, d: $TYPEDECL$) -> type_decl_check(d);
+        (:entry, _e: $ENTRY$) -> { reason: :ok, where: "", gaps: 0 };
+        (:gap, _g: $FORMGAP$) -> { reason: :ok, where: "", gaps: 1 }
+    }
+}

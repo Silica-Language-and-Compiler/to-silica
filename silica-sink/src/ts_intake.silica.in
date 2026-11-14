@@ -1,0 +1,107 @@
+// ts_intake: reduces a decoded frame to a small digest, so that the session logic (ts_session) never names the
+// contract's large frame types. It is the one place a decoded frame is taken apart.
+//
+// Source file: ts_intake.silica.in; the $NAME$ placeholders are spelled out by silica-sink/tools/expand.py.
+//
+// Why a digest: Silica has no type aliases and the compiler's memory grows with every spelling of the frame type;
+// with the session logic written directly over the decoded value the compiler ran out of memory (STATUS.md).
+//
+// The digest { kind, seq, name, text, count, check, flags, keep, printed }:
+//   kind    :rejected (the decoder refused the frame; check.reason is its reason), or the message's tag
+//   seq     the frame's seq (M2..M5); the hello's max_frame; -1 otherwise
+//   name    unit_name (M2..M4); the hello's sender.prefix; the release's session
+//   text    silica_unit (M2); a form's name, as name/arity for a function (M3); the hello's session (empty unless
+//           it resumes); an abort's reason
+//   count   forms (M4), units (M5)
+//   check   the hello's check (ts_check@hello_check) or the form's (ts_check@body_check); :ok otherwise
+//   flags   the hello's profile and mode
+//   keep    the frame re-encoded from the decoded value (what is stored, app design 2.3), in mode :keep; a
+//           hello is kept with an empty session field (contract T5.4)
+//   printed the form's Silica text (ts_print), in mode :print; decls is then the session's context for the printer:
+//           its lowering choices, the unit being printed and the declared types so far (ts_print@form_source); ""
+//           in the other modes. For a hello, in mode :print, printed.text is the session's lowering choices
+module ts_intake;
+
+use wire_etf;
+use ts_text;
+use ts_check;
+use ts_print;
+
+export digest/4;
+
+fn unprinted() -> $PRINTED$ {
+    { ok: false, stub: false, exports: "", text: "", sig: "", code: "", why: "", at: { file: "", line: 0, column: 0 }, decl: "" }
+}
+
+// In mode :print a hello's `printed.text` is the session's lowering choices as the printer reads them
+// (ts_print@options_text); the transpile actor keeps it in the session's context.
+fn hello_options(h: $HELLO$, mode: atom) -> $PRINTED$ {
+    { ok: false, stub: false, exports: "",
+      text: case mode == :print of {
+          true -> ts_print@options_text(h.options.choices);
+          false -> ""
+      },
+      sig: "", code: "", why: "", at: { file: "", line: 0, column: 0 }, decl: "" }
+}
+
+fn form_name(body: $BODY$) -> string {
+    case body of {
+        (:function, f: $FUNCTION$) -> ts_text@concat3(f.head.name, "/", ts_text@itoa(f.head.arity));
+        (:type, d: $TYPEDECL$) -> d.head.name;
+        (:entry, e: $ENTRY$) -> concat("entry ", e.function);
+        (:gap, g: $FORMGAP$) -> g.name
+    }
+}
+
+fn canonical(m: $TO_TRANSPILER$) -> string {
+    sequence proc[mem(normal), transport]
+        e: string <- encode((:etf), m)
+    produces
+        pure e
+    end
+}
+
+fn kept(m: $TO_TRANSPILER$, mode: atom) -> string {
+    case mode == :keep of {
+        true -> canonical(m);
+        false -> ""
+    }
+}
+
+fn passed() -> $CHECKED$ {
+    { reason: :ok, where: "", gaps: 0 }
+}
+
+// The hello as it is stored and compared on a resume (contract T5.4): with an empty session field, so that the
+// first hello of a session and the hello that resumes it give the same bytes when every other field is equal.
+fn hello_kept(h: $HELLO$, mode: atom) -> string {
+    case mode == :keep of {
+        true -> canonical((:hello, { contract: h.contract, session: "", sender: h.sender, options: h.options }));
+        false -> ""
+    }
+}
+
+fn message(m: $TO_TRANSPILER$, silica: boolean, mode: atom, decls: string) -> $DIGEST$ {
+    case m of {
+        (:hello, h: $HELLO$) -> { kind: :hello, seq: h.options.run.max_frame, name: h.sender.prefix, text: h.session, count: 0, check: { reason: ts_check@hello_check(h), where: "", gaps: 0 }, flags: { silica: h.options.profile == :silica, check_mode: h.options.run.mode == :check }, keep: hello_kept(h, mode), printed: hello_options(h, mode) };
+        (:unit_begin, u: $UNITBEGIN$) -> { kind: :unit_begin, seq: u.seq, name: u.unit_name, text: u.silica_unit, count: 0, check: passed(), flags: { silica: silica, check_mode: false }, keep: kept(m, mode), printed: unprinted() };
+        (:form, f: $FORM$) -> { kind: :form, seq: f.seq, name: f.unit_name, text: form_name(f.body), count: 0, check: ts_check@body_check(f.body, silica), flags: { silica: silica, check_mode: false }, keep: kept(m, mode),
+                               printed: case mode == :print of {
+                                   true -> ts_print@form_source(f.body, decls);
+                                   false -> unprinted()
+                               } };
+        (:unit_end, u: $UNITEND$) -> { kind: :unit_end, seq: u.seq, name: u.unit_name, text: "", count: u.forms, check: passed(), flags: { silica: silica, check_mode: false }, keep: kept(m, mode), printed: unprinted() };
+        (:end, e: $END$) -> { kind: :end, seq: e.seq, name: "", text: "", count: e.units, check: passed(), flags: { silica: silica, check_mode: false }, keep: kept(m, mode), printed: unprinted() };
+        (:abort, r: { reason: string }) -> { kind: :abort, seq: 0 - 1, name: "", text: r.reason, count: 0, check: passed(), flags: { silica: silica, check_mode: false }, keep: "", printed: unprinted() };
+        (:release, r: { session: string }) -> { kind: :release, seq: 0 - 1, name: r.session, text: "", count: 0, check: passed(), flags: { silica: silica, check_mode: false }, keep: "", printed: unprinted() }
+    }
+}
+
+// d is what tcp_transport_v1@decode_to_transpiler answered. silica is the session's profile (false before the
+// hello). mode is :check (checks only; also used to replay a stored frame on a resume), :keep (also the re-encoded frame) or :print (also the form's Silica text).
+fn digest(d: $DECODED$, silica: boolean, mode: atom, decls: string) -> $DIGEST$ {
+    case d of {
+        (:rejected, why: atom) -> { kind: :rejected, seq: 0 - 1, name: "", text: "", count: 0, check: { reason: why, where: "", gaps: 0 }, flags: { silica: silica, check_mode: false }, keep: "", printed: unprinted() };
+        (:ok, m: $TO_TRANSPILER$) -> message(m, silica, mode, decls)
+    }
+}

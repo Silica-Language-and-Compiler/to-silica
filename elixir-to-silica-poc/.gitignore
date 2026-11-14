@@ -1,0 +1,9 @@
+/_build/
+/deps/
+/cover/
+/doc/
+/e2s
+*.beam
+*.ez
+erl_crash.dump
+.elixir_ls/

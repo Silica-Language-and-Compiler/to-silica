@@ -1,0 +1,100 @@
+// ts_pool: the transpiler's two pools (app design 3): the session actors and the store regions, each with the
+// transpile actor that belongs to it. A pool member is a supervised child whose child id is an atom, and Silica
+// registers a child id as a name, so every actor of the transpiler is addressed by name (cast_registered) and a
+// restarted actor is found again under the same name. The sizes are spelled out by silica-sink/tools/expand.py
+// (TS_SESSIONS, TS_REGIONS): an atom cannot be made at run time.
+//
+// Source file: ts_pool.silica.in.
+module ts_pool;
+
+use ts_text;
+
+export sessions/0;
+export regions/0;
+export session_name/1;
+export session_index/1;
+export store_name/1;
+export transpile_name/1;
+export port_name/1;
+export region_label/1;
+export region_of/1;
+export base_of/1;
+export session_id/2;
+
+fn sessions() -> int64 {
+    $N_SESSIONS$
+}
+
+fn regions() -> int64 {
+    $N_REGIONS$
+}
+
+fn session_name(i: int64) -> atom {
+    case i of {
+$SESSION_NAME_ARMS$
+    }
+}
+
+// The slot of the session actor whose child id is a, or -1.
+fn session_index(a: atom) -> int64 {
+    $SESSION_INDEX$
+}
+
+fn store_name(r: int64) -> atom {
+    case r of {
+$STORE_NAME_ARMS$
+    }
+}
+
+fn port_name(r: int64) -> atom {
+    case r of {
+$PORT_NAME_ARMS$
+    }
+}
+
+fn transpile_name(r: int64) -> atom {
+    case r of {
+$TRANSPILE_NAME_ARMS$
+    }
+}
+
+// The name of region r as it appears in a session id (app design 4.2), or "" outside the pool.
+fn region_label(r: int64) -> string {
+    case r of {
+$REGION_LABEL_ARMS$
+    }
+}
+
+// A transpile session's id (app design 4.2): the region's name and the store's number of the session's first
+// record, "intake_2:1873".
+fn session_id(r: int64, base: int64) -> string {
+    ts_text@concat3(region_label(r), ":", ts_text@itoa(base))
+}
+
+fn region_named(label: string, r: int64) -> int64 {
+    case r >= regions() of {
+        true -> 0 - 1;
+        false -> case label == region_label(r) of {
+            true -> r;
+            false -> region_named(label, r + 1)
+        }
+    }
+}
+
+// The region a session id names, or -1 when the id is not of the form "<region>:<digits>".
+fn region_of(id: string) -> int64 {
+    label: string <- substring_until_char(id, 0, ':');
+    case length_bytes(label) + 1 < length_bytes(id) and ts_text@atoi(substring(id, length_bytes(label) + 1, length_bytes(id))) >= 0 of {
+        true -> region_named(label, 0);
+        false -> 0 - 1
+    }
+}
+
+// The store record number in a session id, or -1.
+fn base_of(id: string) -> int64 {
+    label: string <- substring_until_char(id, 0, ':');
+    case length_bytes(label) + 1 < length_bytes(id) of {
+        true -> ts_text@atoi(substring(id, length_bytes(label) + 1, length_bytes(id)));
+        false -> 0 - 1
+    }
+}

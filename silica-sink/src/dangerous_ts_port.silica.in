@@ -1,0 +1,291 @@
+// dangerous_ts_port: the ports of the store regions and their supervisor. A port owns one region's (:store)
+// carrier (with a (:backing) store a dangerous actor, hence the unit's name, Silica E4021) and does nothing else:
+// it carries the store owner's commands to the carrier and the carrier's events back to the owner, both by name.
+// The carrier's reference therefore never leaves this unit, and the owner's logic needs no dangerous type.
+//
+//   owner -> port   (:p_boot, 0)  (:p_tx, record)  (:p_sync, 0)  (:p_read, from)  (:p_read_stop, 0)  (:p_credit, n)
+//                   (:p_trim, upto)  (:p_close, 0)
+//   port -> owner   the carrier's own messages, unchanged (transport design 6.8.2); (:port_lost, r)
+//
+// (:p_boot, 0) starts a carrier on the region and opens it. A port that already has one closes it first (the
+// close drains and flushes it) and opens a new one when the close is done: that is how a restarted store owner gets
+// its region back, with what is durable in it. A restarted port has lost its carrier's reference and cannot get
+// the region back (a (:backing) region stays locked by the old carrier): it tells the owner, which ends the
+// transpiler; the next start recovers the region.
+//
+// Source file: dangerous_ts_port.silica.in; the $NAME$ placeholders are spelled out by
+// silica-sink/tools/expand.py, the regions and the store's medium included.
+module dangerous_ts_port;
+
+use Supervisor;
+use wireframe;
+use Carrier;
+use storelog;
+$STORE_USES$
+use ts_pool;
+
+export port_sup/1;
+
+impl dangerous_ts_port for Supervisor;
+
+// The pool of store regions (app design 3.3): one declaration per region.
+$REGION_DECLS$
+
+$REGION_STARTS$
+
+fn no_cars() -> $STORE_CARS$ {
+    sequence proc[mem(normal)]
+        out: $STORE_CARS$ <- empty[$STORE_REF$, mem(normal)]()
+    produces
+        pure out
+    end
+}
+
+fn one_car(c: $STORE_REF$) -> $STORE_CARS$ {
+    sequence proc[mem(normal)]
+        out: $STORE_CARS$ <- prepend[$STORE_REF$, mem(normal)](c, no_cars())
+    produces
+        pure out
+    end
+}
+
+fn has_car(cs: $STORE_CARS$) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [_c: $STORE_REF$, _t: $STORE_CARS$] -> true
+    }
+}
+
+fn car_tx(cs: $STORE_CARS$, seg: string) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [c: $STORE_REF$, _t: $STORE_CARS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, (:tx, seg, self()) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn car_sync(cs: $STORE_CARS$) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [c: $STORE_REF$, _t: $STORE_CARS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, :sync impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn car_read(cs: $STORE_CARS$, from: int64) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [c: $STORE_REF$, _t: $STORE_CARS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, (:read, from) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn car_read_stop(cs: $STORE_CARS$) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [c: $STORE_REF$, _t: $STORE_CARS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, :read_stop impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn car_credit(cs: $STORE_CARS$, n: int64) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [c: $STORE_REF$, _t: $STORE_CARS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, (:credit, n) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn car_trim(cs: $STORE_CARS$, upto: int64) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [c: $STORE_REF$, _t: $STORE_CARS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, (:trim, upto) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn car_close(cs: $STORE_CARS$) -> boolean {
+    case cs of {
+        []: $STORE_CARS$ -> false;
+        [c: $STORE_REF$, _t: $STORE_CARS$] -> {
+            sequence proc[concurrency]
+                b: boolean <- cast(c, :close impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn up_text(r: int64, info: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:link_up, info) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn up_atom(r: int64, kind: atom, why: atom) -> boolean {
+    case kind of {
+        :tx_failed -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r), (:tx_failed, why) impl ActorMessage {})
+            produces
+                pure b
+            end
+        };
+        :read_failed -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r), (:read_failed, why) impl ActorMessage {})
+            produces
+                pure b
+            end
+        };
+        _: atom -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r), (:link_down, why) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn up_number(r: int64, kind: atom, n: int64) -> boolean {
+    case kind of {
+        :tx_credit -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r), (:tx_credit, n) impl ActorMessage {})
+            produces
+                pure b
+            end
+        };
+        :synced -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r), (:synced, n) impl ActorMessage {})
+            produces
+                pure b
+            end
+        };
+        :port_lost -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r), (:port_lost, n) impl ActorMessage {})
+            produces
+                pure b
+            end
+        };
+        _: atom -> {
+            sequence proc[concurrency]
+                b: boolean <- cast_registered(ts_pool@store_name(r), (:rx_end, n) impl ActorMessage {})
+            produces
+                pure b
+            end
+        }
+    }
+}
+
+fn up_log(r: int64, oldest: int64, next: int64, capacity: int64) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:log, oldest, next, capacity) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+fn up_rx(r: int64, record: string) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(ts_pool@store_name(r), (:rx, record) impl ActorMessage {})
+    produces
+        pure b
+    end
+}
+
+// The state after a cast was made. (A helper must not build the behaviour's `(:no_reply, state)` itself: limitation
+// observed, STATUS.md.)
+fn after(_b: boolean, state: $PORT_STATE$) -> $PORT_STATE$ {
+    state
+}
+
+fn port(msg: $PORT_EVENT$, state: $PORT_STATE$) -> (:no_reply, $PORT_STATE$) {
+    case msg of {
+        (:boot, _z: int64) -> (:no_reply, after(up_number(state.r, :port_lost, state.r), state));
+        (:p_boot, _z: int64) -> case has_car(state.car) of {
+            false -> (:no_reply, { car: one_car(start_region(state.r)), r: state.r, reopen: false });
+            true -> (:no_reply, after(car_close(state.car), { car: state.car, r: state.r, reopen: true }))
+        };
+        (:p_tx, seg: string) -> (:no_reply, after(car_tx(state.car, seg), state));
+        (:p_sync, _z: int64) -> (:no_reply, after(car_sync(state.car), state));
+        (:p_read, from: int64) -> (:no_reply, after(car_read(state.car, from), state));
+        (:p_read_stop, _z: int64) -> (:no_reply, after(car_read_stop(state.car), state));
+        (:p_credit, n: int64) -> (:no_reply, after(car_credit(state.car, n), state));
+        (:p_trim, upto: int64) -> (:no_reply, after(car_trim(state.car, upto), state));
+        (:p_close, _z: int64) -> case has_car(state.car) of {
+            true -> (:no_reply, after(car_close(state.car), state));
+            false -> (:no_reply, after(up_atom(state.r, :link_down, :closed), state))
+        };
+        (:link_up, info: string) -> (:no_reply, after(up_text(state.r, info), state));
+        (:log, oldest: int64, next: int64, capacity: int64) -> (:no_reply, after(up_log(state.r, oldest, next, capacity), state));
+        (:tx_credit, n: int64) -> (:no_reply, after(up_number(state.r, :tx_credit, n), state));
+        (:synced, next: int64) -> (:no_reply, after(up_number(state.r, :synced, next), state));
+        (:rx, record: string) -> (:no_reply, after(up_rx(state.r, record), state));
+        (:rx_end, next: int64) -> (:no_reply, after(up_number(state.r, :rx_end, next), state));
+        (:tx_failed, why: atom) -> (:no_reply, after(up_atom(state.r, :tx_failed, why), state));
+        (:read_failed, why: atom) -> (:no_reply, after(up_atom(state.r, :read_failed, why), state));
+        (:link_down, why: atom) -> case state.reopen and why == :closed of {
+            true -> (:no_reply, { car: one_car(start_region(state.r)), r: state.r, reopen: false });
+            false -> (:no_reply, after(up_atom(state.r, :link_down, why), { car: no_cars(), r: state.r, reopen: false }))
+        }
+    }
+}
+
+fn port_initial(r: int64) -> $PORT_STATE$ {
+    { car: no_cars(), r: r, reopen: false }
+}
+
+// The ports: one_for_one, at most 3 restarts in 10 seconds.
+fn init(initial_state: int64) -> $PORT_SUP$ {
+    sequence proc[mem(normal)]
+        f: $FLAGS$ <- { strategy: :one_for_one, allowed_restart_count: 3, restarts_time_frame: 10 };
+        children: $PORT_SPECS$ <- [
+$PORT_CHILDREN$
+        ]
+    produces
+        pure (f, children)
+    end
+}
+
+// What the root supervisor names as this supervisor's behaviour (a child supervisor of another unit must be a
+// unit's own Supervisor implementation).
+fn port_sup(initial_state: int64) -> $PORT_SUP$ {
+    init(initial_state)
+}
