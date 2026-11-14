@@ -13,6 +13,24 @@ proof-of-concept senders exist as templates: [erlang-to-silica-poc/](erlang-to-s
 [elixir-to-silica-poc/](elixir-to-silica-poc/), [gleam-to-silica-poc/](gleam-to-silica-poc/). Each README has an
 "Extending this sender" section and each test suite has one small test per mapping.
 
+## 0. Where things are
+
+| You need | It is in |
+| --- | --- |
+| a template for your sender | the nearest PoC: [erlang-to-silica-poc/](erlang-to-silica-poc/) (`src/e2s_codex.erl`), [elixir-to-silica-poc/](elixir-to-silica-poc/) (`lib/e2s/codex.ex`), [gleam-to-silica-poc/](gleam-to-silica-poc/) (`src/gleam_to_silica_poc/codex.gleam`) |
+| the parts that lower language semantics | `split` (code around a `receive`, section 6a), `sup` (static supervisor), `lift` (a `fn` that captures nothing, Elixir and Gleam), in the same directory as the codex |
+| programs that are converted | `examples/demo.*` and `examples/actors.*` in each PoC; what a PoC cannot convert is in `test/fixtures/` |
+| how to run a PoC and its tests | its `README.md` (quick start, "How to test", "Extending this sender") |
+| the rules | [contract/tcp-transport-v1.md](contract/tcp-transport-v1.md); schema [contract/tcp_transport_v1.silica](contract/tcp_transport_v1.silica) |
+| a worked session, and 23 recorded ones | [contract/examples/](contract/examples/), [contract/goldens/](contract/goldens/) (`INDEX.txt` lists them) |
+| a running transpiler to send to | build it: [silica-sink/build.sh](silica-sink/build.sh) (about six minutes); status in [silica-sink/STATUS.md](silica-sink/STATUS.md) |
+| a place for your released transpiler | `<language>-to-silica/` (for example `elixir-to-silica/`); a proof of concept is `<language>-to-silica-poc/` |
+| gaps already found, per language | [SENDER_GAPS_STATUS.md](SENDER_GAPS_STATUS.md), [APP_GAPS.md](APP_GAPS.md) |
+| a map of the whole repository | [README.md](README.md) |
+
+A good route: read sections 1 and 2, copy the nearest PoC, get one function through check mode (section 4), then
+work through section 6 construct by construct, with the PoC's tests as the pattern (section 10).
+
 ## 1. Who does what
 
 | You (the language side) | The transpiler |
