@@ -95,6 +95,22 @@ typed_function(Seq, Unit) ->
 
 entry_form(Seq, Unit) -> {form, #{seq => Seq, unit_name => Unit, body => {entry, #{function => <<"f">>, arity => 0}}}}.
 
+%% A node declaration (contract T9.17): the hub of the three-node example. Bad: a remote names a peer that is not listed.
+node_form(Seq, Unit) -> node_form(Seq, Unit, <<"a@localhost">>).
+
+node_form(Seq, Unit, RemotePeer) -> node_form(Seq, Unit, RemotePeer, listen, {-1, -1}).
+
+%% Role is the role of the first peer; Redial the {initial, max} milliseconds (-1 -1: not stated; 0 0: off).
+node_form(Seq, Unit, RemotePeer, Role, {RedialI, RedialM}) ->
+    {form, #{seq => Seq, unit_name => Unit,
+             body => {node, #{name => <<"hub@localhost">>, timing => #{creation => 1, net_ticktime_s => 60,
+                                                  redial_initial_ms => RedialI, redial_max_ms => RedialM},
+                              net => #{listen_address => <<"127.0.0.1">>, listen_port => 0, epmd_port => 4369, cookie_file => <<"cookie">>},
+                              tables => #{peers => [#{name => <<"a@localhost">>, host => <<"localhost">>, port => 0, role => Role},
+                                                    #{name => <<"c@localhost">>, host => <<"localhost">>, port => 0, role => listen}],
+                                          remotes => [#{name => <<"a_inbox">>, peer => RemotePeer, tag => <<"reply">>, fields => [<<"int64">>]}],
+                                          locals => [#{name => <<"hub_in">>, tag => <<"request">>, fields => [<<"atom">>, <<"int64">>]}]}}}}}.
+
 gap_form(Seq, Unit) ->
     {form, #{seq => Seq, unit_name => Unit,
              body => {gap, #{name => <<"g/1">>, place => #{file => <<"g.src">>, line => 9},
@@ -195,6 +211,18 @@ sessions() ->
      {"ok_every_message", "M1 to M5 with each kind of form: function, type, entry, gap (contract 5.1, 9.3)",
       [hello(), ub(0, D, U), add_form(1), type_form(2, D), entry_form(3, D), gap_form(4, D), ue(5, D, 4), fin(6, 1)],
       [welcome(), result(ok, 1, 1, 0)]},
+     {"ok_node_declaration", "a function and a node declaration (contract T9.17): the manifest and bees.config files are written",
+      [hello(), ub(0, D, U), add_form(1), node_form(2, D), ue(3, D, 2), fin(4, 1)],
+      [welcome(), result(ok, 1, 0, 0)]},
+     {"reject_bad_node", "a node declaration whose remote names a peer it does not list (contract T9.17)",
+      [hello(), ub(0, D, U), add_form(1), node_form(2, D, <<"z@localhost">>), ue(3, D, 2), fin(4, 1)],
+      [welcome(), {rejected, 2, bad_node}, result(failed, 1, 0, 1)]},
+     {"ok_node_redial", "a node that dials states its redial: the delays go to bees.config (contract T9.17)",
+      [hello(), ub(0, D, U), add_form(1), node_form(2, D, <<"a@localhost">>, dial, {250, 4000}), ue(3, D, 2), fin(4, 1)],
+      [welcome(), result(ok, 1, 0, 0)]},
+     {"reject_node_no_redial", "a node with a dial peer that does not state its redial (BEES has no default; contract T9.17)",
+      [hello(), ub(0, D, U), add_form(1), node_form(2, D, <<"a@localhost">>, dial, {-1, -1}), ue(3, D, 2), fin(4, 1)],
+      [welcome(), {rejected, 2, bad_node}, result(failed, 1, 0, 1)]},
      {"ok_every_high_level_node", "one function holding every high-level node kind, H1 to H40 (contract 9.4)",
       [hello(), ub(0, D, U), function(1, D, high_nodes()), ue(2, D, 1), fin(3, 1)],
       [welcome(), result(ok, 1, 1, 0)]},

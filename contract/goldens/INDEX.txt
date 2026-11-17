@@ -1,5 +1,9 @@
 ok_worked_example	5 frames	the contract's worked example (contract 12), in check mode
 ok_every_message	8 frames	M1 to M5 with each kind of form: function, type, entry, gap (contract 5.1, 9.3)
+ok_node_declaration	6 frames	a function and a node declaration (contract T9.17): the manifest and bees.config files are written
+reject_bad_node	6 frames	a node declaration whose remote names a peer it does not list (contract T9.17)
+ok_node_redial	6 frames	a node that dials states its redial: the delays go to bees.config (contract T9.17)
+reject_node_no_redial	6 frames	a node with a dial peer that does not state its redial (BEES has no default; contract T9.17)
 ok_every_high_level_node	5 frames	one function holding every high-level node kind, H1 to H40 (contract 9.4)
 ok_every_low_level_node	5 frames	one function holding every low-level node kind, L1 to L7 (contract 9.5)
 ok_every_type	5 frames	every type entry and every hint strength and policy (contract 8)

@@ -185,6 +185,18 @@ fn entry_form(g: $DIGEST$, state: $TRANSPILE_STATE$) -> $TRANSPILE_STATE$ {
              state.n, state.diag)
 }
 
+// The unit's (:node, ...) form (contract T9.17): the manifest and bees.config of a node program in BEAM mode, as two
+// files beside the unit's, <unit>.wire and <unit>.bees.config. g.text is "node <manifest>\x1d<config>" (ts_print@node_text).
+fn node_form(g: $DIGEST$, state: $TRANSPILE_STATE$) -> $TRANSPILE_STATE$ {
+    body: string <- substring(g.text, 5, length_bytes(g.text));
+    cut: int64 <- ts_text@find(body, "\x1d", 0);
+    _: boolean <- to_owner_out(state.r, state.attempt, concat(state.acc.silica_unit, ".wire"), substring(body, 0, cut));
+    _: boolean <- to_owner_out(state.r, state.attempt, concat(state.acc.silica_unit, ".bees.config"), substring(body, cut + 1, length_bytes(body)));
+    marked: $TRANSPILE_STATE$ <- with_acc(state, state.acc, { units: state.n.units, gaps: state.n.gaps, files: state.n.files + 2, written: state.n.written }, state.diag);
+    // the session is a node program from here on: every unit gets its atoms manifest (close_unit)
+    { r: marked.r, attempt: marked.attempt, silica: marked.silica, acc: marked.acc, n: marked.n, diag: marked.diag, decls: concat("\x18", marked.decls) }
+}
+
 fn fault_always(g: $DIGEST$) -> boolean {
     g.kind == :unit_begin and length_bytes(ts_config@fault_transpile_always()) > 0 and g.name == ts_config@fault_transpile_always()
 }
@@ -227,7 +239,12 @@ fn close_unit(g: $DIGEST$, state: $TRANSPILE_STATE$) -> $TRANSPILE_STATE$ {
                           concat(diag, ts_reply@finding_frame(g.seq, g.name, :error, "T4003", ts_text@concat3("nothing of the unit ", state.acc.name, " could be written; it has no output file"))));
         true -> {
             _: boolean <- to_owner_out(state.r, state.attempt, concat(state.acc.silica_unit, ".silica"), text);
-            with_acc(state, no_unit(), { units: state.n.units, gaps: gaps, files: state.n.files + 1, written: 0 }, diag)
+            // A node program (contract T9.17): the unit's atoms manifest too (BEES compiler guide A1.2).
+            _: boolean <- case contains(state.decls, "\x18") of {
+                true -> to_owner_out(state.r, state.attempt, concat(state.acc.silica_unit, ".atoms"), ts_print@atom_manifest(text));
+                false -> true
+            };
+            with_acc(state, no_unit(), { units: state.n.units, gaps: gaps, files: state.n.files + case contains(state.decls, "\x18") of { true -> 2; false -> 1 }, written: 0 }, diag)
         }
     }
 }
@@ -244,9 +261,12 @@ fn transpile(g: $DIGEST$, state: $TRANSPILE_STATE$) -> $TRANSPILE_STATE$ {
                          decls: concat(ts_text@concat3("\x1c", ts_text@fresh(g.name), "\x1f"), state.decls) };
         :form -> case starts_with(g.text, "entry ") of {
             true -> entry_form(g, state);
-            false -> case g.printed.ok of {
-                true -> with_decl(printed_form(g, state), g);
-                false -> with_decl(gap_form(g, state), g)
+            false -> case starts_with(g.text, "node ") of {
+                true -> node_form(g, state);
+                false -> case g.printed.ok of {
+                    true -> with_decl(printed_form(g, state), g);
+                    false -> with_decl(gap_form(g, state), g)
+                }
             }
         };
         :unit_end -> close_unit(g, state);

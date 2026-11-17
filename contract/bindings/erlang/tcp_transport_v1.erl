@@ -72,6 +72,12 @@
                      notes := #{hints := [hint()], overrides := [override()]}}}
       | {type, #{head := #{name := binary(), params := [binary()], exported := boolean(), file := binary()},
                  at_line := integer(), types := [type_node()], root := idx()}}
+      | {node, #{name := binary(), timing := #{creation := integer(), net_ticktime_s := integer(),
+                                       redial_initial_ms := integer(), redial_max_ms := integer()},
+                 net := #{listen_address := binary(), listen_port := integer(), epmd_port := integer(), cookie_file := binary()},
+                 tables := #{peers := [#{name := binary(), host := binary(), port := integer(), role := dial | listen}],
+                             remotes := [#{name := binary(), peer := binary(), tag := binary(), fields := [binary()]}],
+                             locals := [#{name := binary(), tag := binary(), fields := [binary()]}]}}}
       | {entry, #{function := binary(), arity := integer()}}
       | {gap, #{name := binary(), place := #{file := binary(), line := integer()}, construct := binary(),
                 note := binary()}}.

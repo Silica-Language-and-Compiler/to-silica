@@ -34,6 +34,7 @@ All proof of concept compilers are required to have -poc at the end of their nam
 | **build and run the sink** | [silica-sink/build.sh](silica-sink/build.sh) (about six minutes); what is built: [silica-sink/STATUS.md](silica-sink/STATUS.md) |
 | understand **how the sink is designed** | [silica-sink/silica_sink_design.md](silica-sink/silica_sink_design.md) |
 | run the **sink's trials** | `silica-sink/trials/run_trials.sh <work-dir> <port> [all]` |
+| see **three nodes that send messages to each other** (hub topology, BEES BEAM mode) | `examples/three_nodes/` in each PoC, and contract T9.17 |
 | see **what was found when real apps went through** | [APP_GAPS.md](APP_GAPS.md) (newest first) |
 | get **Silica source out** of the sink | [tools/export_debug_output.py](tools/export_debug_output.py) (provisional exporter) |
 
@@ -75,7 +76,7 @@ Leave out `--mode transpile` for check mode, which validates the frames and stor
 ## Not in this repository
 
 The Silica compiler and standard library live in a sibling checkout (`../silica`; `SILICA` in `build.sh`). The sink is
-built with `silica-999916-macos-applesilicon` from its `binaries/`. This repository only reads and runs them.
+built with `silica-999909-macos-applesilicon` from its `binaries/` (the default of `build.sh` since 2026-11-16; BEES moved to it the same day). This repository only reads and runs them.
 
 ## Documents
 

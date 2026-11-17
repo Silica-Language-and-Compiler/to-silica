@@ -148,7 +148,7 @@ pub fn unit(source: Source, seq: Int) -> Result(List(Frame), String) {
           ),
           40,
         )
-      let forms = forms(module, env)
+      let forms = list.append(node_directives(source.text).0, forms(module, env))
       let frames =
         list.index_map(forms, fn(form, index) {
           frame.FormFrame(seq + 1 + index, name, form)
@@ -464,6 +464,9 @@ type Env {
     /// The public functions that are sent as not exported: they wait only
     /// in a function they call (`split.Split`).
     unexported: List(String),
+    /// Contract T9.17: a function of the module that sends to a registered
+    /// name on another node: its name -> the registered name.
+    remote_sends: Dict(String, String),
   )
 }
 
@@ -509,6 +512,132 @@ type Kind {
   Process(Primitive)
   /// Any other function without a Gleam body to translate: a gap form.
   Foreign(construct: String, note: String)
+}
+
+/// Contract T9.17: a node program. Gleam has no attribute that carries data, so the node is declared in comment lines
+/// the sender reads from the source text. A line is `//@silica_node` and a key with its words:
+///
+///     //@silica_node name hub@localhost
+///     //@silica_node peer a@localhost localhost listen
+///     //@silica_node local hub_in request String Int
+///     //@silica_node remote a_inbox a@localhost reply Int send_a_inbox
+///
+/// `name` (required), `peer <node> <host> dial|listen`, `local <name> <tag> <kind>...`,
+/// `remote <name> <node> <tag> <kind>... <function>`, and the optional `creation`, `listen_address`, `listen_port`,
+/// `epmd_port`, `cookie_file`, `net_ticktime_s`, and `redial off` or `redial <initial_ms> <max_ms>` (whether a lost
+/// link to a dial peer is dialed again: BEES has no default, so a node with a dial peer states it and one without
+/// leaves it out). A kind is `Int`, `Float`, `String`, `Bool` or `Atom`: what the fields
+/// of the message are after its tag (the sender states every field's type, contract 8.6). The tag is the snake-case
+/// name of the constructor of the message (`Request` is `request`). The last word of a `remote` is the module's
+/// function that sends to the name: a call `send_a_inbox(Reply(2))` is H39 (:send_named). Its body is not sent; give
+/// it the real send (an external to `erlang:send`) so the module still runs on the BEAM.
+/// Answers the (:node) form (none without a `name`) and the remote sends, function -> registered name.
+fn node_directives(text: String) -> #(List(Form), Dict(String, String)) {
+  let lines =
+    string.split(text, "\n")
+    |> list.filter_map(fn(line) {
+      let line = string.trim(line)
+      case string.starts_with(line, "//@silica_node ") {
+        False -> Error(Nil)
+        True ->
+          Ok(
+            string.drop_start(line, 15)
+            |> string.split(" ")
+            |> list.filter(fn(word) { word != "" }),
+          )
+      }
+    })
+  let kind = fn(word) {
+    case word {
+      "Int" -> "int64"
+      "Float" -> "float64"
+      "String" -> "string"
+      "Bool" -> "boolean"
+      "Atom" -> "atom"
+      other -> other
+    }
+  }
+  let word_of = fn(key: String, default: String) {
+    list.find_map(lines, fn(line) {
+      case line {
+        [k, value] if k == key -> Ok(value)
+        _ -> Error(Nil)
+      }
+    })
+    |> result.unwrap(default)
+  }
+  let int_of = fn(key: String, default: Int) {
+    int.parse(word_of(key, int.to_string(default))) |> result.unwrap(default)
+  }
+  let redial =
+    list.find_map(lines, fn(line) {
+      case line {
+        ["redial", "off"] -> Ok(#(0, 0))
+        ["redial", initial, max] ->
+          case int.parse(initial), int.parse(max) {
+            Ok(i), Ok(m) -> Ok(#(i, m))
+            _, _ -> Error(Nil)
+          }
+        _ -> Error(Nil)
+      }
+    })
+    |> result.unwrap(#(-1, -1))
+  let remotes =
+    list.filter_map(lines, fn(line) {
+      case line {
+        ["remote", name, peer, tag, ..rest] ->
+          case list.reverse(rest) {
+            [function, ..kinds] ->
+              Ok(#(
+                frame.NodeRemote(
+                  name,
+                  peer,
+                  tag,
+                  list.map(list.reverse(kinds), kind),
+                ),
+                function,
+              ))
+            [] -> Error(Nil)
+          }
+        _ -> Error(Nil)
+      }
+    })
+  case list.any(lines, fn(line) { list.first(line) == Ok("name") }) {
+    False -> #([], dict.new())
+    True -> #(
+      [
+        frame.NodeDecl(
+          name: word_of("name", ""),
+          creation: int_of("creation", 1),
+          listen_address: word_of("listen_address", "127.0.0.1"),
+          listen_port: int_of("listen_port", 0),
+          epmd_port: int_of("epmd_port", 4369),
+          cookie_file: word_of("cookie_file", "cookie"),
+          net_ticktime_s: int_of("net_ticktime_s", 60),
+          redial_initial_ms: redial.0,
+          redial_max_ms: redial.1,
+          peers: list.filter_map(lines, fn(line) {
+            case line {
+              ["peer", node, host, role] if role == "dial" || role == "listen" ->
+                Ok(frame.NodePeer(node, host, 0, role))
+              _ -> Error(Nil)
+            }
+          }),
+          remotes: list.map(remotes, fn(pair) { pair.0 }),
+          locals: list.filter_map(lines, fn(line) {
+            case line {
+              ["local", name, tag, ..kinds] ->
+                Ok(frame.NodeLocal(name, tag, list.map(kinds, kind)))
+              _ -> Error(Nil)
+            }
+          }),
+        ),
+      ],
+      dict.from_list(
+        list.map(remotes, fn(pair) { #(pair.1, { pair.0 }.name) }),
+      ),
+    )
+  }
 }
 
 fn environment(
@@ -697,6 +826,7 @@ fn environment(
     made:,
     constant_functions:,
     unexported:,
+    remote_sends: node_directives(text).1,
   )
 }
 
@@ -2888,7 +3018,48 @@ fn apply(
 /// externals, one of its functions (H32), or an unqualified import. The
 /// result type of a call to a function of the module is the one its
 /// signature declares (T8.10 d): the codex sees the whole module.
+/// Contract T9.17: a call of a function the node declaration names as the send to a registered name on another node
+/// is H39, the same node as a send to a local name (T9.14c): BEES's proxy for the name carries it. Any other call is
+/// `named_plain_call`.
 fn named_call(
+  at: g.Span,
+  name: String,
+  arguments: List(Argument(g.Expression)),
+  scope: Scope,
+  expected: Ty,
+  builder: Builder,
+) -> #(Int, Builder) {
+  case dict.get(builder.env.remote_sends, name) {
+    Error(Nil) ->
+      named_plain_call(at, name, arguments, scope, expected, builder)
+    Ok(registered) -> {
+      let start = builder
+      case positional(arguments) {
+        Ok([message]) -> {
+          let #(message, builder) = expr(message, scope, any, builder)
+          send(
+            start,
+            at,
+            "send to the name " <> registered <> " on another node",
+            frame.SendNamed(_, registered, message),
+            message,
+            TyNil,
+            builder,
+          )
+        }
+        _ ->
+          gap(
+            builder,
+            at,
+            name,
+            "a send to a registered name on another node takes the message as its one argument (contract T9.17)",
+          )
+      }
+    }
+  }
+}
+
+fn named_plain_call(
   at: g.Span,
   name: String,
   arguments: List(Argument(g.Expression)),

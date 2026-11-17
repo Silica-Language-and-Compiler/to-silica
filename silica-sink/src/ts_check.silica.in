@@ -309,12 +309,92 @@ fn type_decl_check(d: $TYPEDECL$) -> { reason: atom, where: string, gaps: int64 
     }
 }
 
+// ------------------------------------------------------------------ a node declaration (contract T9.17)
+
+fn lit_ok(s: string) -> boolean {
+    ts_text@is_identifier(s) and length_bytes(s) <= 64
+}
+
+// A field type is Silica type text of the wire's typed subset (BEES wire-v1 5.3). Only its characters are checked here:
+// BEES's manifest reader (bees_config) checks the rest, and says which line.
+fn type_char_ok(s: string, i: int64) -> boolean {
+    case i >= length_bytes(s) of {
+        true -> true;
+        false -> {
+            b: int64 <- ts_text@at(s, i);
+            ok: boolean <- (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 95 or b == 32 or b == 44 or b == 40 or b == 41 or b == 91 or b == 93 or b == 123 or b == 125 or b == 58;
+            ok and type_char_ok(s, i + 1)
+        }
+    }
+}
+
+fn fields_ok(fs: $LS$) -> boolean {
+    case fs of {
+        []: $LS$ -> true;
+        [f: string, t: $LS$] -> length_bytes(f) > 0 and length_bytes(f) <= 200 and type_char_ok(f, 0) and fields_ok(t)
+    }
+}
+
+fn peers_ok(ps: $NODEPEERS$) -> boolean {
+    case ps of {
+        []: $NODEPEERS$ -> true;
+        [p: $NODEPEER$, t: $NODEPEERS$] -> length_bytes(p.name) > 0 and length_bytes(p.host) > 0 and p.port >= 0 and p.port <= 65535 and peers_ok(t)
+    }
+}
+
+fn has_peer(ps: $NODEPEERS$, name: string) -> boolean {
+    case ps of {
+        []: $NODEPEERS$ -> false;
+        [p: $NODEPEER$, t: $NODEPEERS$] -> p.name == name or has_peer(t, name)
+    }
+}
+
+fn remotes_ok(rs: $NODEREMOTES$, ps: $NODEPEERS$) -> boolean {
+    case rs of {
+        []: $NODEREMOTES$ -> true;
+        [r: $NODEREMOTE$, t: $NODEREMOTES$] -> lit_ok(r.name) and lit_ok(r.tag) and fields_ok(r.fields) and has_peer(ps, r.peer) and remotes_ok(t, ps)
+    }
+}
+
+fn locals_ok(ls: $NODELOCALS$) -> boolean {
+    case ls of {
+        []: $NODELOCALS$ -> true;
+        [l: $NODELOCAL$, t: $NODELOCALS$] -> lit_ok(l.name) and lit_ok(l.tag) and fields_ok(l.fields) and locals_ok(t)
+    }
+}
+
+// T9.17: the node's name is text, the ports are ports, every remote names a listed peer, every registered name and tag
+// is an identifier, every field type is made of type characters. A breach is :bad_node.
+fn has_dial_peer(ps: $NODEPEERS$) -> boolean {
+    case ps of {
+        []: $NODEPEERS$ -> false;
+        [p: $NODEPEER$, t: $NODEPEERS$] -> case p.role == :dial of { true -> true; false -> has_dial_peer(t) }
+    }
+}
+
+// redial (BEES N2c, no default): -1 for both = not stated, which only a node without a dial-role peer may do;
+// 0 and 0 = off; otherwise initial 10..60000 and max initial..600000. A node without a dial-role peer states nothing.
+fn redial_ok(n: $NODEDECL$) -> boolean {
+    case has_dial_peer(n.tables.peers) of {
+        false -> n.timing.redial_initial_ms == -1 and n.timing.redial_max_ms == -1;
+        true -> (n.timing.redial_initial_ms == 0 and n.timing.redial_max_ms == 0) or (n.timing.redial_initial_ms >= 10 and n.timing.redial_initial_ms <= 60000 and n.timing.redial_max_ms >= n.timing.redial_initial_ms and n.timing.redial_max_ms <= 600000)
+    }
+}
+
+fn node_check(n: $NODEDECL$) -> { reason: atom, where: string, gaps: int64 } {
+    case length_bytes(n.name) > 0 and length_bytes(n.name) <= 255 and n.net.listen_port >= 0 and n.net.listen_port <= 65535 and n.net.epmd_port >= 1 and n.net.epmd_port <= 65535 and n.timing.net_ticktime_s >= 4 and n.timing.net_ticktime_s <= 3600 and n.timing.creation >= 0 and redial_ok(n) and peers_ok(n.tables.peers) and remotes_ok(n.tables.remotes, n.tables.peers) and locals_ok(n.tables.locals) of {
+        true -> { reason: :ok, where: "", gaps: 0 };
+        false -> { reason: :bad_node, where: ".body", gaps: 0 }
+    }
+}
+
 // The checks on one form's body. gaps is how many gaps it holds (a gap form is one; T9.10).
 fn body_check(body: $BODY$, silica: boolean) -> { reason: atom, where: string, gaps: int64 } {
     case body of {
         (:function, f: $FUNCTION$) -> function_check(f, silica);
         (:type, d: $TYPEDECL$) -> type_decl_check(d);
         (:entry, _e: $ENTRY$) -> { reason: :ok, where: "", gaps: 0 };
+        (:node, n: $NODEDECL$) -> node_check(n);
         (:gap, _g: $FORMGAP$) -> { reason: :ok, where: "", gaps: 1 }
     }
 }

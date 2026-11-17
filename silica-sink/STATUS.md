@@ -20,11 +20,15 @@ The design is [silica_sink_design.md](silica_sink_design.md); the contract is
 its section 6; names: open) and [DECISION_DATA_unbuilt_p0.md](DECISION_DATA_unbuilt_p0.md) (open). The compiler is now
 `silica-999916-macos-applesilicon`; what changed with it is in "Compiler 999916" below.
 
+## Node declarations and compiler 999909 (2026-11-16)
+
+The default compiler is now `silica-999909-macos-applesilicon` (BEES moved to it the same day); the sink builds with it in one run. New: the `(:node)` form (contract T9.17): `ts_check@node_check` (`:bad_node`), `ts_print@node_text` and `ts_actor_transpile@node_form`, which write `<unit>.wire` and `<unit>.bees.config` beside the unit. Silica limit met: a decoded record takes at most four fields, so the form is nested. Run: the three Erlang `examples/three_nodes` programs give `ok`, 0 gaps, 3 files each; BEES's `bees_config_beam.py generate` accepts the files; the printed units compile. The sink also writes `<unit>.atoms` for a node program (every atom literal of the unit; BEES A1.2). `tools/node_kit/build_node.sh` builds hub and edge_a with BEES and they ran against each other (see `tools/node_kit/README.md`). Not built: more than one link per node (BEES).
+
 ## What exists
 
 | Piece | File | State |
 | --- | --- | --- |
-| Build | `build.sh <build-dir> [port]` | works; **one compiler run** by default since compiler 999916 (about six minutes); `TS_FAST=1` is the earlier four-run build with a cached schema unit (about two minutes, for work on the transpiler); `TS_STORE=memory\|backing`, `TS_REGIONS`, `TS_SESSIONS`, `TS_CAPACITY`, `TS_TRIAL_FAULTS` |
+| Build | `build.sh <build-dir> [port]` | works; **one compiler run** by default since compiler 999916 (about six minutes); the four-run `TS_FAST=1` build was removed on 2026-11-17 (an application is one compilation unit); `TS_STORE=memory\|backing`, `TS_REGIONS`, `TS_SESSIONS`, `TS_CAPACITY`, `TS_TRIAL_FAULTS` |
 | Type and pool spelling | `tools/expand.py` | writes the `*.silica` units from `src/*.silica.in`; fails if its types differ from the schema's; spells out the pools (regions, session actors) |
 | Atom and shape prelude | `tools/prelude.py` | writes `ts_prelude.silica`, which names every atom and record shape in one order. Written to make four compiler runs agree; **still needed with one run** (limitation 1) |
 | Configuration | `src/ts_config.silica` | port 7411, credit window 64, max frame 1 MiB, debug output on, 3 transpile attempts, trial hooks (empty) |
@@ -41,7 +45,6 @@ its section 6; names: open) and [DECISION_DATA_unbuilt_p0.md](DECISION_DATA_unbu
 | Store owners | `src/ts_region.silica.in`, `ts_actor_store.silica.in` | one per region: lease, storing, sync, replay, recovery, resume, release |
 | Transpile actors | `src/ts_actor_transpile.silica.in` | one per region; keeps the session's declared types (`(:type)` forms) and hands them to the printer with each form |
 | Root | `src/dangerous_to_silica.silica.in` | listener owner, root supervisor, warden (report sink), reporter, main, orderly end |
-| Interface copies | `src/stubs/*.silica.in` | `TS_FAST=1` only: what run 4 of the four-run build compiles against instead of `ts_print` and `ts_intake` |
 | Goldens | `../contract/goldens/` | 23 sessions as `.frames` and `.expect`, generator and player (`ok_types_stated` is new) |
 | Trials | `trials/run_trials.sh <work-dir> <port> [all]` | builds, then `p0_check_mode` (20 cases), goldens (23), `p2_actors` (23 cases), `p1_export`, `p3_types` (32 cases, then the generated unit compiled, linked and run), `p4_processes` (36 cases, then two generated units compiled, linked and run: processes and a program with an entry point); with `all` `p2_actors` again on a `(:backing)` store, kill and restart, orderly end |
 | Debug exporter | `../tools/export_debug_output.py` | PROVISIONAL: cuts output files out of the transpiler's debug output |
@@ -1023,7 +1026,7 @@ Everything is now built and tried with `../silica/binaries/silica-999916-macos-a
 | --- | --- |
 | Do the schema unit and the transpiler's own units compile in **one** compiler run? | **Yes.** One process, exit 0: 343 s, 2.5 GB resident at most (with `ts_prelude`; 347 s and 2.2 GB without). With 999919 the same run ended with `out_of_memory`. `build.sh` now does one run by default |
 | Is `ts_prelude` still needed? | **Yes** (limitation observed). Compiled in one run **without** it, the program links and starts, and each store owner then ends at its first message with `language_error: no case arm matched`, so the trials fail (19 of 20 `p0` cases). With it, the same sources pass. Not understood further; it was built to make four runs agree on atom and shape numbers |
-| Are the interface-only copies (`src/stubs`) still needed? | Only for `TS_FAST=1`, which is kept because it rebuilds in about two minutes (the schema unit is compiled once and cached) against six. It is not needed for memory any more |
+| Are the interface-only copies (`src/stubs`) still needed? | No. They were removed on 2026-11-17 together with `TS_FAST=1`: an application is one compilation unit, and no build compiles parts apart and links their objects |
 | Schema unit compile time | unchanged: about 200 s of the build (a four-run build took 5 min 38 s without the cache and 2 min 12 s with it) |
 | The limits below, re-tested one by one with both compilers (scratch `w3_limits/`) | **None changed.** Same messages and same output for items 2, 4, 5 (4 fields), 6, 8, 9, 10, 12 and for DECISION_DATA_printer.md §1.1 to §1.4, §3.2 (ten words), §3.4. Not re-tested: 3, 11 |
 | Item 5, "8 elements in a decoded tuple" | did not reproduce with either compiler: tuples of 9 to 16 elements compiled, and 9- and 10-element tuples decoded and printed |
@@ -1162,10 +1165,9 @@ Scratch programs, each one question. None of this was reported or changed in Sil
 
 ```sh
 silica-sink/build.sh /path/to/build 7411                    # (:memory) store, 4 regions, 8 session actors; one compiler run, about 6 minutes
-TS_FAST=1 silica-sink/build.sh /path/to/build 7411          # four runs with a cached schema unit, about 2 minutes
 TS_STORE=backing TS_STORE_DIR=/var/lib/to-silica silica-sink/build.sh /path/to/build 7411
 /path/to/build/dangerous_to_silica < /dev/null              # listens on 127.0.0.1:7411 until killed
-silica-sink/trials/run_trials.sh /path/to/work 7442 all     # builds and runs everything; about 25 minutes (TS_FAST=1: about 12)
+silica-sink/trials/run_trials.sh /path/to/work 7442 all     # builds and runs everything; about 25 minutes
 # a generated unit with processes and its caller: Silica's Supervisor unit, and a prelude unit first
 python3 silica-sink/tools/prelude.py --all ts_prelude.silica Supervisor.silica erl_demo.silica caller.silica
 printf 'ts_prelude.silica\nSupervisor.silica\nerl_demo.silica\ncaller.silica\n' > silica.config

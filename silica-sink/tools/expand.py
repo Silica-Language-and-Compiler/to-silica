@@ -105,8 +105,18 @@ M["FUNCTION"] = "{ head: $FHEAD$, code: $CODE$, types: $TYPES$, notes: $NOTES$ }
 M["TYPEDECL"] = ("{ head: { name: string, params: $LS$, exported: boolean, file: string }, at_line: int64, "
                  "types: $TYPES$, root: int64 }")
 M["ENTRY"] = "{ function: string, arity: int64 }"
+M["NODEPEER"] = "{ name: string, host: string, port: int64, role: :dial | :listen }"
+M["NODEPEERS"] = "List[$NODEPEER$, mem(normal)]"
+M["NODEREMOTE"] = "{ name: string, peer: string, tag: string, fields: $LS$ }"
+M["NODEREMOTES"] = "List[$NODEREMOTE$, mem(normal)]"
+M["NODELOCAL"] = "{ name: string, tag: string, fields: $LS$ }"
+M["NODELOCALS"] = "List[$NODELOCAL$, mem(normal)]"
+M["NODETIMING"] = "{ creation: int64, net_ticktime_s: int64, redial_initial_ms: int64, redial_max_ms: int64 }"
+M["NODENET"] = "{ listen_address: string, listen_port: int64, epmd_port: int64, cookie_file: string }"
+M["NODETABLES"] = "{ peers: $NODEPEERS$, remotes: $NODEREMOTES$, locals: $NODELOCALS$ }"
+M["NODEDECL"] = "{ name: string, timing: $NODETIMING$, net: $NODENET$, tables: $NODETABLES$ }"
 M["FORMGAP"] = "{ name: string, place: { file: string, line: int64 }, construct: string, note: string }"
-M["BODY"] = "(:function, $FUNCTION$) | (:type, $TYPEDECL$) | (:entry, $ENTRY$) | (:gap, $FORMGAP$)"
+M["BODY"] = "(:function, $FUNCTION$) | (:type, $TYPEDECL$) | (:node, $NODEDECL$) | (:entry, $ENTRY$) | (:gap, $FORMGAP$)"
 M["FORM"] = "{ seq: int64, unit_name: string, body: $BODY$ }"
 M["UNITEND"] = "{ seq: int64, unit_name: string, forms: int64 }"
 M["END"] = "{ seq: int64, units: int64 }"
@@ -330,7 +340,7 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: expand.py <output-directory>   (build.sh passes its build directory)")
     out_dir = sys.argv[1]
-    for src_dir, to_dir in ((SRC, out_dir), (os.path.join(SRC, "stubs"), os.path.join(out_dir, "stubs"))):
+    for src_dir, to_dir in ((SRC, out_dir),):
         os.makedirs(to_dir, exist_ok=True)
         for name in sorted(os.listdir(src_dir)):
             if not name.endswith(".silica.in"):

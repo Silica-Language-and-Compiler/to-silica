@@ -715,6 +715,32 @@ of concept, not of the contract.
   replies do not exist in a Gleam program until they are read. The transpiler is a local, trusted peer (T3.1,
   T3.2).
 
+## A node program: three nodes that send messages to each other
+
+**NOT BUILT OR RUN YET: written 2026-11-16 on a machine with no Gleam installed.** The Gleam code (`frame.gleam`,
+`wire.gleam`, `codex.gleam`: `node_directives`, `named_call`) and `examples/three_nodes/` have never been compiled.
+Build and test them before relying on them; the Erlang and Elixir senders are built and tested.
+
+**What this sender maps** (contract T9.17). One Gleam module is one node. Gleam has no attribute that carries data,
+so the node is declared in comment lines the sender reads from the source text:
+
+```gleam
+//@silica_node name hub@localhost
+//@silica_node cookie_file cookie
+//@silica_node peer a@localhost 127.0.0.1 listen
+//@silica_node local hub_in request String Int
+//@silica_node remote a_inbox a@localhost reply Int send_a_inbox
+```
+
+`name` (required), `peer <node> <host> dial|listen`, `local <name> <tag> <kind>...`,
+`remote <name> <node> <tag> <kind>... <function>`, and the optional `creation`, `listen_address`, `listen_port`,
+`epmd_port`, `cookie_file`, `net_ticktime_s`, and `redial off` or `redial <initial_ms> <max_ms>` (on a node with a dial peer; BEES has no default). A kind is `Int`, `Float`, `String`, `Bool` or `Atom`. The tag is the
+snake-case name of the message's constructor (`Request(..)` is `request`). The last word of a `remote` is a function of
+the module: **a call of it is sent as `(:send_named)`** (H39) and its body is not sent, so it can be a stub that lets
+the module compile (`fn send_a_inbox(message: Reply) -> Nil { Nil }`). A pid does not cross a node: a request names the
+registered name to answer to (a `String` field), and the answering function picks the send by it (`answer/2` of
+`examples/three_nodes/hub.gleam`).
+
 ## How to run
 
 Gleam 1.19 and Erlang/OTP are needed.

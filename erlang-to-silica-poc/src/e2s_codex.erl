@@ -49,7 +49,7 @@
 -export([file/1, file/2, frames/2, frames/3, hello/1, hello/2, choices/0, ident/1, snake/1, unit_ident/1]).
 
 %% env: what the typing pass may look at. s is the session map of session/1.
--record(env, {file, mod, id, s}).
+-record(env, {file, mod, id, s, remotes = #{}}).
 %% b: the builder of one function form. vars: variable -> {Type, Strength}. types/tmap: the type table and its
 %% index. hints: node -> type index. decl: nodes whose type comes only from a -spec or -record (T8.2 :declared).
 -record(b, {nodes = [], n = 0, locs = [], env, vars = #{}, types = [], tn = 0, tmap = #{}, hints = #{},
@@ -215,13 +215,14 @@ sig({ok, _Several}, _Id, _S) -> {no, <<"has a -spec with several clauses, which 
 %% The frames of one unit: every (:type) form first, each after the types it names (T8.14, T5.3), then the
 %% functions and the declarations that are gaps, in source order, then the entry.
 unit(#{file := File, mod := Mod, id := Id, forms := Forms, gen := Gen}, S, Seq0) ->
-    Env = #env{file = File, mod = Mod, id = Id, s = S},
+    Env = #env{file = File, mod = Mod, id = Id, s = S, remotes = node_remotes(Forms)},
     Unit = atom_to_binary(Mod),
     Exports = lists:append([Es || {attribute, _, export, Es} <- Forms]),
     ExportAll = lists:member(export_all, lists:flatten([Os || {attribute, _, compile, Os} <- Forms])),
     Exported = fun(FA) -> (ExportAll orelse lists:member(FA, Exports)) andalso not maps:is_key(FA, Gen) end,
     ok = gen_sigs(Forms, Env),
-    Bodies = type_forms(Forms, Env)
+    Bodies = node_forms(Forms, Unit)
+        ++ type_forms(Forms, Env)
         ++ lists:flatmap(fun(F) -> form(F, Env, Exported) end, Forms)
         ++ [{entry, #{function => fname(Mod, main, 0, Env), arity => 0}}
             || maps:is_key({Mod, main, 0}, maps:get(funs, S)), Exported({main, 0})],
@@ -231,6 +232,59 @@ unit(#{file := File, mod := Mod, id := Id, forms := Forms, gen := Gen}, S, Seq0)
     [{unit_begin, #{seq => Seq0, unit_name => Unit, silica_unit => <<?PREFIX/binary, Id/binary>>, source => File}}]
         ++ Frames
         ++ [{unit_end, #{seq => Next, unit_name => Unit, forms => length(Bodies)}}].
+
+%% A node program (contract T9.17): `-silica_node([...]).` declares the node this module runs on, the nodes it talks to
+%% and the registered names that cross. The transpiler writes the BEES manifest and bees.config from the one form sent.
+%%   {name, Node}                     required: the node's name, for example 'hub@localhost'
+%%   {peer, Node, Host, dial|listen}  a node this one talks to; a dial peer is found through EPMD ("epmd" port)
+%%   {remote, Name, Node, Tag, [Kind]}  a registered name on Node: `{Name, Node} ! {Tag, ...}` casts to it
+%%   {local, Name, Tag, [Kind]}       a registered name here that peers may cast {Tag, ...} to
+%%   {redial, off} | {redial, InitialMs, MaxMs}   whether a lost link to a dial peer is dialed again (BEES has no default:
+%%                                    state it on a node with a dial peer, leave it out on one without)
+%%   {listen_port, N} {listen_address, S} {epmd_port, N} {cookie_file, S} {net_ticktime_s, N} {creation, N}   optional
+%% Kind is integer | float | atom | boolean | binary: what the fields of the message are (a field's type is the node's
+%% to state, as everywhere, contract 8.6). The message is the tagged tuple {Tag, Field...}; BEES's wire carries it as
+%% the tuple (atom, Field...), which is the tagged tuple the unit's processes send and receive.
+node_forms(Forms, _Unit) ->
+    case [Opts || {attribute, _, silica_node, Opts} <- Forms] of
+        [] -> [];
+        [Opts | _] ->
+            Get = fun(K, D) -> proplists:get_value(K, Opts, D) end,
+            Text = fun(A) when is_atom(A) -> atom_to_binary(A); (L) -> unicode:characters_to_binary(L) end,
+            Fields = fun(Ks) -> [node_kind(K) || K <- Ks] end,
+            {RedialI, RedialM} = case [R || R <- Opts, element(1, R) =:= redial] of
+                                     [{redial, off}] -> {0, 0};
+                                     [{redial, I, M}] -> {I, M};
+                                     _ -> {-1, -1}
+                                 end,
+            [{node, #{name => Text(proplists:get_value(name, Opts)),
+                      timing => #{creation => Get(creation, 1), net_ticktime_s => Get(net_ticktime_s, 60),
+                              redial_initial_ms => RedialI, redial_max_ms => RedialM},
+                      net => #{listen_address => Text(Get(listen_address, "127.0.0.1")),
+                               listen_port => Get(listen_port, 0),
+                               epmd_port => Get(epmd_port, 4369),
+                               cookie_file => Text(Get(cookie_file, "cookie"))},
+                      tables => #{peers => [#{name => Text(N), host => Text(H), port => 0, role => R}
+                                            || {peer, N, H, R} <- Opts, R =:= dial orelse R =:= listen],
+                                  remotes => [#{name => atom_to_binary(Nm), peer => Text(N), tag => atom_to_binary(T), fields => Fields(Ks)}
+                                              || {remote, Nm, N, T, Ks} <- Opts],
+                                  locals => [#{name => atom_to_binary(Nm), tag => atom_to_binary(T), fields => Fields(Ks)}
+                                             || {local, Nm, T, Ks} <- Opts]}}}]
+    end.
+
+node_kind(integer) -> <<"int64">>;
+node_kind(float) -> <<"float64">>;
+node_kind(atom) -> <<"atom">>;
+node_kind(boolean) -> <<"boolean">>;
+node_kind(binary) -> <<"string">>;
+node_kind(Other) -> erlang:error({silica_node_kind, Other}).
+
+%% The remote names a module declares: {Name, Node} -> Tag. {Name, Node} ! Message is a send to one of them.
+node_remotes(Forms) ->
+    case [Opts || {attribute, _, silica_node, Opts} <- Forms] of
+        [] -> #{};
+        [Opts | _] -> maps:from_list([{{Nm, N}, T} || {remote, Nm, N, T, _} <- Opts])
+    end.
 
 %% The parameter types of the functions e2s_split made (continuations, copies: they have no -spec). A made
 %% function is called only by the pieces of the function it was cut from, so its parameters have the types of
@@ -1083,8 +1137,22 @@ expr({'fun', Anno, {function, Name, Arity}}, _X, B = #b{env = Env}) when is_atom
 expr({'fun', Anno, {function, {atom, _, M}, {atom, _, F}, {integer, _, A}}}, _X, B) ->
     fun_ref(Anno, atom_to_binary(M), M, F, A, B);
 %% --- processes and messages (H20..H26)
+expr({op, Anno, '!', {tuple, _, [{atom, _, Name}, {atom, _, Node}]}, Msg}, _X, B0 = #b{env = #env{remotes = Remotes}}) ->
+    %% `{Name, Node} ! Message` to a name -silica_node declared as a remote: H39 (:send_named), which the transpiler
+    %% writes as a cast to the registered name; BEES's proxy for the name carries it to the peer (contract T9.17).
+    case maps:find({Name, Node}, Remotes) of
+        {ok, _Tag} ->
+            {M1, MT, B1} = expr(Msg, any, B0),
+            case why(MT, B1) of
+                ok -> node(send_named, Anno, [atom_to_binary(Name), M1], MT, B1);
+                Why -> gap(Anno, <<"!">>, ["the message has no type: ", Why, " (T8.10 e)"], B0)
+            end;
+        error ->
+            gap(Anno, <<"send to a process on another node">>,
+                <<"the name and node are not declared as a remote in -silica_node (a send to a pid on another node has no meaning: BEES sends to registered names)">>, B0)
+    end;
 expr({op, Anno, '!', {tuple, _, [_, _]}, _}, _X, B) ->
-    gap(Anno, <<"send to a process on another node">>, <<"inter-node communication is outside the proof of concept">>, B);
+    gap(Anno, <<"send to a process on another node">>, <<"only {Name, Node} ! Message with Name and Node atoms declared as a remote in -silica_node is sent">>, B);
 expr({op, Anno, '!', {atom, _, Name}, Msg}, _X, B0) ->
     %% H39: a send to a registered name. Its value is the message, as a send's is (H22, T9.14c).
     {M1, MT, B1} = expr(Msg, any, B0),
