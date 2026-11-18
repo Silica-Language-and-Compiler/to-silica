@@ -24,6 +24,20 @@ program's `-silica_node`, contract T9.17), a node without one must not.
 three nodes, Erlang programs.** The hub (`erl_hub`, two listen peers) and both edges (`erl_edge_a`, `erl_edge_c`, dial through EPMD, redial
 250 to 4000 ms) built with BEES's own check and ran together: cookie digest accepted and handshake complete with both,
 `hub: request 21 from a_inbox`, `hub: request 34 from c_inbox`, `a: the hub answered 42`, `c: the hub answered 68`
-(`live_run_hub.txt`, `live_run_edge_a.txt`, `live_run_edge_c.txt`). The Elixir programs (`elixir-to-silica-poc/examples/three_nodes/`) ran the same way: `{:hub_got, 21, :a_inbox}`, `{:hub_got, 34, :c_inbox}`, `{:a_got_answer, 42}`, `{:c_got_answer, 68}` (`live_run_elixir_*.txt`). The Gleam programs have not been compiled or run: Gleam is not installed here.
+(`live_run_hub.txt`, `live_run_edge_a.txt`, `live_run_edge_c.txt`). The Elixir programs (`elixir-to-silica-poc/examples/three_nodes/`) ran the same way: `{:hub_got, 21, :a_inbox}`, `{:hub_got, 34, :c_inbox}`, `{:a_got_answer, 42}`, `{:c_got_answer, 68}` (`live_run_elixir_*.txt`). The Gleam programs (`gleam-to-silica-poc/examples/three_nodes/`, Gleam 1.19.2) ran live on 2026-11-18 with compiler 999906: `a: the hub answered 42`, `c: the hub answered 68` (`live_run_gleam_*.txt`).
+
+**Name hosts (2026-11-18).** A peer host may be a name with the `epmd` port (`{host, "localhost"}, {port, epmd}`): BEES's
+`bees_config_beam.py` accepts it, and a node that dials one needs BEES's resolver edge. `build_node.sh` reads the
+unit's `bees.config` and, when a dial peer's host is not an IPv4 literal, passes `--resolve` to `bees_edge_gen.py` and
+adds BEES's `bees_addr`, `dangerous_bees_resolve` and `dangerous_bees_resolve_native` units to the leaf (the layout of
+BEES's `trials/n2_live/nodes/d`). Without that the node prints `resolve localhost: not built into this program` and never
+dials. A node that only listens is built as before.
+
+**Run 2026-11-18 (same compiler, project-bees on f3af955): the three nodes with `"localhost"` as every peer host.**
+Each edge prints `[bees] resolve localhost: ok 127.0.0.1`, then `epmd: found, dialing hub`; the hub completes the
+handshake with both, and the replies are the same (`a: the hub answered 42`, `c: the hub answered 68`). The three
+`live_run_hub.txt`, `live_run_edge_a.txt`, `live_run_edge_c.txt` are this run. The Elixir set ran the same way the same day, with `"localhost"`
+too: the same resolve and handshake lines, `{:hub_got, 21, :a_inbox}`, `{:hub_got, 34, :c_inbox}`, `{:a_got_answer, 42}`,
+`{:c_got_answer, 68}` (`live_run_elixir_*.txt`).
 
 A node is one compilation unit: the leaf's `silica.config` lists the program's unit and the BEES units, one compiler run compiles them. `build_node.sh` uses BEES's `trial.mk`, which assembles the compiler's per-unit output and links it; that is BEES's stand-in and goes when BEES becomes a source library (project-bees N0c).

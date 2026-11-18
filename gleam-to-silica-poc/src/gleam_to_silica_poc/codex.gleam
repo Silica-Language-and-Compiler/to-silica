@@ -49,6 +49,7 @@
 //// README, "Extending this sender", has the steps.
 
 import glance as g
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/float
 import gleam/int
@@ -1062,6 +1063,12 @@ fn forms(module: g.Module, env: Env) -> List(Form) {
     list.filter_map(module.functions, fn(definition) {
       let function = definition.definition
       let start = function.location.start
+      // Contract T9.17: a function the node declaration names as the send to
+      // a remote name is not sent: every call of it is a (:send_named).
+      use <- bool.guard(
+        dict.has_key(env.remote_sends, function.name),
+        Error(Nil),
+      )
       case kind(definition) {
         Plain -> Ok(#(start, function_form(function, env)))
         Process(_) -> Error(Nil)

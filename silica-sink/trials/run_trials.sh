@@ -33,7 +33,7 @@ mkdir -p "${1:?usage: run_trials.sh <work-dir> <port> [all]}" && WORK="$(cd "$1"
 PORT="${2:?usage: run_trials.sh <work-dir> <port> [all]}"
 ALL="${3:-}"
 SILICA="${SILICA:-/Volumes/2T/silica}"
-CC="${SILICA_COMPILER:-$SILICA/binaries/silica-999909-macos-applesilicon}"
+CC="${SILICA_COMPILER:-$SILICA/binaries/silica-999906-macos-applesilicon}"
 EBIN="$WORK/trial_ebin"; mkdir -p "$EBIN"
 erlc +debug_info -o "$EBIN" "$REPO"/contract/bindings/erlang/*.erl "$REPO/contract/examples/add_example.erl" \
     "$REPO/contract/goldens/goldens.erl" "$HERE/p0_check_mode/p0_trial.erl" "$HERE/p2_actors/p2_trial.erl" "$HERE/p3_types/p3_trial.erl" \

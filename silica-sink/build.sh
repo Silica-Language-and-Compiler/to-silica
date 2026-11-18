@@ -7,7 +7,7 @@
 # replaces the default listening port 7411 (a literal in ts_config).
 # Environment:
 #   SILICA            the Silica checkout (default /Volumes/2T/silica)
-#   SILICA_COMPILER   default $SILICA/binaries/silica-999909-macos-applesilicon
+#   SILICA_COMPILER   default $SILICA/binaries/silica-999906-macos-applesilicon
 #   TS_STORE          memory (default) or backing; TS_STORE_DIR (backing: default <build-dir>/store),
 #   TS_REGIONS, TS_CAPACITY, TS_SESSIONS   the pools (silica-sink/tools/expand.py says what each is)
 #   TS_TRIAL_FAULTS   1: build with the trial hooks of ts_config set (the trials need them); never for real use
@@ -32,7 +32,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${1:?usage: build.sh <build-dir> [port]}"
 PORT="${2:-7411}"
 SILICA="${SILICA:-/Volumes/2T/silica}"
-CC="${SILICA_COMPILER:-$SILICA/binaries/silica-999909-macos-applesilicon}"
+CC="${SILICA_COMPILER:-$SILICA/binaries/silica-999906-macos-applesilicon}"
 export TS_STORE="${TS_STORE:-memory}"
 mkdir -p "$BUILD" && BUILD="$(cd "$BUILD" && pwd)" || exit 1
 export TS_STORE_DIR="${TS_STORE_DIR:-$BUILD/store}"

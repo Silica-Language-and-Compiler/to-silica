@@ -4,7 +4,7 @@
 #   tools/node_kit/build_node.sh <bees-root> <compiler> <export-dir> <unit> <leaf-dir> [start-delay-ms]
 #
 #   <bees-root>     a checkout of project-bees (its Makefiles, tools/ and src/ are used; nothing in it is changed)
-#   <compiler>      the Silica compiler, for example ../silica/binaries/silica-999909-macos-applesilicon
+#   <compiler>      the Silica compiler, for example ../silica/binaries/silica-999906-macos-applesilicon
 #   <export-dir>    the files the sink printed for the session (tools/export_debug_output.py): <unit>.silica,
 #                   <unit>.wire and <unit>.bees.config
 #   <unit>          the Silica unit, for example erl_hub
@@ -37,6 +37,14 @@ cp "$EXP/$UNIT.wire" node.wire; cp "$EXP/$UNIT.bees.config" bees.config
 : > node.atoms
 # the cookie file bees.config names (relative to the leaf): one line, not readable by others
 cookie=$(sed -n 's/.*{cookie_file, "\([^"]*\)"}.*/\1/p' bees.config); printf 'to-silica-node-kit-cookie\n' > "$cookie"; chmod 600 "$cookie"
+# A dial peer whose host is a name (not an IPv4 literal) needs BEES's resolver edge: bees_edge_gen.py --resolve and its
+# three units (the layout of BEES's trials/n2_live/nodes/d). Without it the node prints "resolve <host>: not built into
+# this program" and never dials. A node that only listens, or dials IPv4 literals, is built without it.
+RESOLVE=""
+if grep -E '\{role, dial\}' bees.config | grep -Ev '\{host, "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"\}' | grep -q '{host, "'; then
+    RESOLVE="--resolve"
+    for u in bees_addr dangerous_bees_resolve dangerous_bees_resolve_native; do ln -sfn "$BEES/src/shim/$u.silica" "lib/$u.silica"; done
+fi
 cat > run.role <<ROLE
 // main of a node program the sink printed (tools/node_kit/build_node.sh): the failure reporter, the node, the unit's
 // processes, then run/0 after $DELAY ms (a dialing node's link must be up before it sends).
@@ -65,7 +73,7 @@ EDGE_GEN := \$(BEES_ROOT)/tools/bees_edge_gen.py
 PART := \$(BEES_ROOT)/src/shim/beam_node_edge.part
 USES := --use bees_msgs --use bees_dist --use bees_ingress --use bees_peers --use beam_dist --use beam_conf --use beam_peers --use dangerous_beam_auth --use dangerous_beam_net --use $UNIT
 _ := \$(shell cd "\$(LEAF_DIR)" && "\$(BEES_ROOT)/tools/bees_config_beam.py" generate --config bees.config -o lib node.wire 1>&2 && \\
-	"\$(EDGE_GEN)" dangerous_$UNIT dangerous_$UNIT.silica \$(USES) \$(PART) \$(ROLES)/node.role \$(ROLES)/cookie_conf.role \$(ROLES)/timing_conf.role run.role)
+	"\$(EDGE_GEN)" dangerous_$UNIT dangerous_$UNIT.silica \$(USES) $RESOLVE \$(PART) \$(ROLES)/node.role \$(ROLES)/cookie_conf.role \$(ROLES)/timing_conf.role run.role)
 include \$(BEES_ROOT)/tools/trial.mk
 MK
 # The root unit is generated while make reads the Makefile, so the entry list is empty on the first run (BEES's own

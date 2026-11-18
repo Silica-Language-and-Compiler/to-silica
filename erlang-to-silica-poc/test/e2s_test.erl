@@ -27,7 +27,9 @@ main() -> main([]).
 
 main(Args) ->
     Online = case Args of
-                 [Port] -> online(list_to_integer(atom_to_list(Port)));
+                 %% -s gives the port as an atom, -run gives it as a string: both are read.
+                 [Port] when is_atom(Port) -> online(list_to_integer(atom_to_list(Port)));
+                 [Port] when is_list(Port) -> online(list_to_integer(Port));
                  [] -> io:format("(no port given: the online part did not run)~n"), []
              end,
     Results = mappings() ++ typing() ++ split() ++ supervisor() ++ names() ++ demo() ++ actors() ++ node_program() ++ flow() ++ release() ++ Online,

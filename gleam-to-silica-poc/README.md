@@ -31,7 +31,8 @@ language side decides every type and every numeric conversion**; see "Types".
 | `src/gleam_to_silica_poc.gleam` | the command line |
 | `examples/demo.gleam` | the example program: one small function for each construct of the subset, and a process that is spawned, sent to and received from. No gap |
 | `examples/actors.gleam` | a working application of three actors: a coordinator (`main`), a counter (a plain `gleam_otp` actor whose state is a record), and an auditor (a named `gleam_otp` actor under a `gleam_otp` static supervisor, restart `Transient`, written in the source). `gleam run -m actors` runs it (`test/actors.gleam` is its compiled copy) and prints `counter: total 9, adds 3, small`, `mean 3.0`, `auditor: 3 notes`; the transpiled program prints the same three lines. No gap |
-| `test/` | the tests, `run_test.sh`, and `demo.gleam` and `actors.gleam`, copies of the examples |
+| `examples/three_nodes/` | a node program for each of three nodes: `hub.gleam`, `edge_a.gleam`, `edge_c.gleam` ("A node program" below; contract T9.17). No gap |
+| `test/` | the tests, `run_test.sh`, and `demo.gleam`, `actors.gleam` and `three_nodes/`, copies of the examples |
 | `test/fixtures/gaps.gleam` | what the examples used to leave out on purpose, kept for the tests: every function of it is a gap, holds one, or is answered by the transpiler with a gap of its own (a closure, tuple indexing, a call into another module, foreign code, a linked spawn, inter-node communication, supervisors that cannot be read, a name that is not read) |
 
 There is no hand-written Erlang. Everything is Gleam; Erlang is reached only through `@external` declarations of
@@ -717,9 +718,33 @@ of concept, not of the contract.
 
 ## A node program: three nodes that send messages to each other
 
-**NOT BUILT OR RUN YET: written 2026-11-16 on a machine with no Gleam installed.** The Gleam code (`frame.gleam`,
-`wire.gleam`, `codex.gleam`: `node_directives`, `named_call`) and `examples/three_nodes/` have never been compiled.
-Build and test them before relying on them; the Erlang and Elixir senders are built and tested.
+**Built, tested and run 2026-11-18** (Gleam 1.19.2, installed with Homebrew; before that day this code had never
+been compiled: it was written 2026-11-16 on a machine with no Gleam).
+
+- **Compiles.** `gleam build` compiled the node support as written (`frame.gleam`, `wire.gleam`, `codex.gleam`:
+  `node_directives`, `named_call`), with no error and no warning. One thing was missing and was added: a function
+  a `remote` line names is no longer sent as a form (the text here and in the code already said "its body is not
+  sent"; `forms` in `codex.gleam`).
+- **Tests.** `test/run_test.sh 7411`: 68 passed, no failures (the 63 from before and 5 for node programs: the
+  copies in `test/three_nodes/` are the examples, every frame of the three passes the contract's
+  `check_frame:check/1`, no gap, no entry form and no form for the send functions, the hub's and an edge's
+  `(:node)` form field by field, their `(:send_named)` nodes, `redial off` as 0 and 0, no form without a `name`).
+- **The examples are Gleam that type-checks**: `gleam test` compiles the copies in `test/three_nodes/`. They were
+  changed to get there and to transpile: the entry is `run`, not `main`; the send functions hold the BEAM's send;
+  and the message types have no field labels (`Request(String, Int)`, `Reply(Int)`): with labels a type of one
+  constructor is the record idiom, sent as a `(:record)`, and the transpiler prints only a symbol or a tagged
+  tuple as a message (`T4002`, one gap in each unit before the change).
+- **Sink.** Each of `hub.gleam`, `edge_a.gleam`, `edge_c.gleam`: check mode `ok (units 1, gaps 0, rejected 0,
+  files 0)`; transpile mode `ok (units 1, gaps 0, rejected 0, files 4)` (`gl_<unit>.silica`, `.wire`,
+  `.bees.config`, `.atoms`), with the warnings `T4004` (`run/0` goes on in another function) and `T2001`.
+- **Live run.** The three units were built with `../tools/node_kit/build_node.sh` (project-bees, compiler
+  `silica-compiler` = 999906, Apple Silicon, EPMD on 4369) and run together, hub first, the edges 3 s later: cookie
+  digest accepted and handshake complete on both links, `hub: request from a_inbox`, `hub: request from c_inbox`,
+  `a: the hub answered 42`, `c: the hub answered 68`. Every node also printed `[silica] root actor exited (no
+  supervisor)` several times; where that comes from was not looked into.
+- **Not run:** the three modules on the BEAM itself, as Gleam. There they would not talk to each other as they
+  are: `process.new_name("hub_in")` registers a name with a unique suffix, not `hub_in`, and nothing starts
+  distribution.
 
 **What this sender maps** (contract T9.17). One Gleam module is one node. Gleam has no attribute that carries data,
 so the node is declared in comment lines the sender reads from the source text:
@@ -736,8 +761,11 @@ so the node is declared in comment lines the sender reads from the source text:
 `remote <name> <node> <tag> <kind>... <function>`, and the optional `creation`, `listen_address`, `listen_port`,
 `epmd_port`, `cookie_file`, `net_ticktime_s`, and `redial off` or `redial <initial_ms> <max_ms>` (on a node with a dial peer; BEES has no default). A kind is `Int`, `Float`, `String`, `Bool` or `Atom`. The tag is the
 snake-case name of the message's constructor (`Request(..)` is `request`). The last word of a `remote` is a function of
-the module: **a call of it is sent as `(:send_named)`** (H39) and its body is not sent, so it can be a stub that lets
-the module compile (`fn send_a_inbox(message: Reply) -> Nil { Nil }`). A pid does not cross a node: a request names the
+the module: **a call of it is sent as `(:send_named)`** (H39) and the function itself is not sent (no form), so its
+body is free to be the BEAM's own send, as in the examples (an `@external` to `erlang:send/2` with the destination
+`#(atom.create("a_inbox"), atom.create("a@localhost"))`). **The entry is `pub fn run()`, not `main`**: BEES owns the
+node program's `main` (`../tools/node_kit/README.md`), so no entry form is sent; `run` waits in a `process.receive`
+of its own, which makes it a process function the transpiler exports and the node's root starts. A pid does not cross a node: a request names the
 registered name to answer to (a `String` field), and the answering function picks the send by it (`answer/2` of
 `examples/three_nodes/hub.gleam`).
 
@@ -827,7 +855,8 @@ the script.
 
 The examples must be valid Gleam. `test/demo.gleam` and `test/actors.gleam` are byte-for-byte copies of the files
 in `examples/` (tests check that), so `gleam test` compiles and type-checks them with the rest of the test tree.
-After changing an example: `cp examples/demo.gleam examples/actors.gleam test/`. `test/fixtures/gaps.gleam` is
+After changing an example: `cp examples/demo.gleam examples/actors.gleam test/`. The node programs are copied the
+same way, into `test/three_nodes/` (`cp examples/three_nodes/*.gleam test/three_nodes/`; a test checks the copies). `test/fixtures/gaps.gleam` is
 compiled with the test tree too (its foreign receive is only declared; the fixture is not run).
 
 ## Open questions for the contract

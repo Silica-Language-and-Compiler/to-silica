@@ -6,7 +6,7 @@ defmodule EdgeC do
   @silica_node [
     name: :"c@localhost",
     cookie_file: "cookie",
-    peer: {:"hub@localhost", "127.0.0.1", :dial},
+    peer: {:"hub@localhost", "localhost", :dial},
     redial: {250, 4000},
     remote: {:hub_in, :"hub@localhost", :request, [:atom, :integer]},
     local: {:c_inbox, :reply, [:integer]}

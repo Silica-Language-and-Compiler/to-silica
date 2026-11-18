@@ -357,7 +357,7 @@ as a send to a local name: BEES registers a proxy under the remote name.
 ```erlang
 -silica_node([{name, 'hub@localhost'},                         %% this node
               {cookie_file, "cookie"},
-              {peer, 'a@localhost', "127.0.0.1", listen},       %% a node it talks to; listen or dial
+              {peer, 'a@localhost', "localhost", listen},       %% a node it talks to; listen or dial
               {local, hub_in, request, [atom, integer]},        %% a registered name here: {request, Atom, Integer}
               {remote, a_inbox, 'a@localhost', reply, [integer]}]).  %% a name there: {reply, Integer}
 %% {redial, off} | {redial, InitialMs, MaxMs}: on a node with a dial peer (BEES has no default); not on one without
@@ -377,8 +377,9 @@ the hub's `hub_in` to double a number and receives `{reply, N}` on its own inbox
 | `Pid ! Message` to a pid on another node, `spawn/4` on another node, `monitor_node`, `net_kernel`, `global`, `rpc` | yes (no meaning: BEES sends to registered names) |
 | `{Name, Node} ! Message` for a name or node `-silica_node` does not declare as a remote | yes, with a note that says so |
 
-BEES limits: one live link per node today (the first `peer` line); a peer host that is a name with `epmd` lookup is
-refused by BEES's `bees_config_beam.py` until BEES builds it, so the examples write `127.0.0.1`. The attribute is
+BEES connects every `peer` line (a hub holds a link to each edge). A peer host is a name or an IPv4 literal: with
+the `epmd` port BEES resolves the name on each dial, then asks that host's EPMD, so the examples write `"localhost"`
+(run live 2026-11-18). An IPv6 literal is refused by BEES's `bees_config_beam.py`. The attribute is
 ignored by Erlang itself: the three modules also run on stock Erlang nodes (`erl -sname hub`, and so on).
 
 ## Decisions and limits a reader should know

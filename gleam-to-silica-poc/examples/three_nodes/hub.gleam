@@ -8,8 +8,9 @@
 ////
 //// The //@silica_node lines declare the node (contract T9.17); to-silica turns them into BEES's manifest and
 //// bees.config (BEAM mode: EPMD, started with `epmd -daemon` if it is not running, and a cookie). The last word of a
-//// `remote` line is the function that sends to that name. Its body is not used by to-silica; it is what lets the
-//// module compile as Gleam.
+//// `remote` line is the function that sends to that name: to-silica reads a call of it as the send and does not send
+//// the function itself, whose body is the BEAM's send. The entry is run/0, not main/0: BEES owns the node program's
+//// main, which starts the node and then starts run/0.
 ////
 //@silica_node name hub@localhost
 //@silica_node cookie_file cookie
@@ -19,6 +20,7 @@
 //@silica_node remote a_inbox a@localhost reply Int send_a_inbox
 //@silica_node remote c_inbox c@localhost reply Int send_c_inbox
 
+import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/io
 import gleam/otp/actor
@@ -27,21 +29,29 @@ import gleam/otp/supervision
 
 /// What a peer asks: the registered name to answer to, and a number.
 pub type HubMessage {
-  Request(reply_to: String, n: Int)
+  Request(String, Int)
 }
 
 /// What the hub answers (and what an edge's inbox receives).
 pub type Reply {
-  Reply(value: Int)
+  Reply(Int)
 }
 
+/// The BEAM's own send, to a registered name on another node: `{Name, Node} ! Message`.
+@external(erlang, "erlang", "send")
+fn send_to_name(to: #(Atom, Atom), message: message) -> message
+
+/// The send to the registered name a_inbox on a@localhost. to-silica reads a call of it as (:send_named) and does
+/// not send this function (the `remote` line above names it); on the BEAM it is this send.
 fn send_a_inbox(message: Reply) -> Nil {
-  let _ = message
+  send_to_name(#(atom.create("a_inbox"), atom.create("a@localhost")), message)
   Nil
 }
 
+/// The send to the registered name c_inbox on c@localhost. to-silica reads a call of it as (:send_named) and does
+/// not send this function (the `remote` line above names it); on the BEAM it is this send.
 fn send_c_inbox(message: Reply) -> Nil {
-  let _ = message
+  send_to_name(#(atom.create("c_inbox"), atom.create("c@localhost")), message)
   Nil
 }
 
@@ -88,7 +98,7 @@ fn start_supervisor(
 }
 
 /// Start the service and stay up while the edges talk to it.
-pub fn main() -> Nil {
+pub fn run() -> Nil {
   let hub_in: Name(HubMessage) = process.new_name("hub_in")
   let assert Ok(_) = start_supervisor(hub_in)
   let wait: Subject(Int) = process.new_subject()

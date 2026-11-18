@@ -6,7 +6,7 @@ defmodule EdgeA do
   @silica_node [
     name: :"a@localhost",
     cookie_file: "cookie",
-    peer: {:"hub@localhost", "127.0.0.1", :dial},
+    peer: {:"hub@localhost", "localhost", :dial},
     redial: {250, 4000},
     remote: {:hub_in, :"hub@localhost", :request, [:atom, :integer]},
     local: {:a_inbox, :reply, [:integer]}

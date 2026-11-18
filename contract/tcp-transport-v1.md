@@ -950,9 +950,11 @@ you must send for it. A node outside these rules is not written: its function be
   - **What the output is not.** The files are the node's configuration; the node's root unit, its start-up and the
     TCP carrier are BEES's (`tools/bees_edge_gen.py`, compiler guide N2.1 and N2.2); `tools/node_kit/build_node.sh`
     writes them for a unit the sink printed. BEES owns `main`, so a node program's entry is a function other than
-    `main/0` (the examples use `run/0`), which the root starts. BEES supports **one live link
-    per node** today (`peer` lines beyond the first are table entries, compiler guide B1a): of a hub with two edges
-    only the first listed peer is connected until BEES builds more than one link.
+    `main/0` (the examples use `run/0`), which the root starts. BEES connects **every `peer`
+    line** (BEAM mode, BEES N2b): a `dial` peer is dialed, and all `listen` peers share the node's one listener, so a hub
+    holds a link to each of its edges (run live 2026-11-17). A peer host is an IPv4 literal or a name; a node that dials
+    a name is built with BEES's resolver edge (`bees_edge_gen.py --resolve`, which `build_node.sh` adds; run live
+    2026-11-18).
 
 ### 9.5 Nodes: the low-level vocabulary
 

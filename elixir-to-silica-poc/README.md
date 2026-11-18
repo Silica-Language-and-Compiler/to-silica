@@ -521,7 +521,7 @@ beside the unit. `send({:name, :"node@host"}, message)` to a name the attribute 
 @silica_node [
   name: :"hub@localhost",                                    # this node
   cookie_file: "cookie",
-  peer: {:"a@localhost", "127.0.0.1", :listen},               # a node it talks to; :listen or :dial
+  peer: {:"a@localhost", "localhost", :listen},               # a node it talks to; :listen or :dial
   local: {:hub_in, :request, [:atom, :integer]},              # a registered name here: {:request, atom, integer}
   remote: {:a_inbox, :"a@localhost", :reply, [:integer]}      # a name there: {:reply, integer}
 ]
@@ -533,7 +533,8 @@ A field kind is `:integer | :float | :atom | :boolean | :binary`. A pid does not
 registered name its answer is to go to**, and the answering function picks the send by that field (`answer/2` of
 `examples/three_nodes/hub.ex`). A send to a pid on another node, `Node.spawn`, `:erpc`, `:global` stay gaps. A send to
 a name or node the attribute does not declare is a gap that says so. BEES's limits are the Erlang sender's
-(README there): one live link per node today, and peer hosts written as IPv4 literals.
+(README there): every `peer` line is a link, and a peer host is a name (the examples write `"localhost"`; run live
+2026-11-18) or an IPv4 literal.
 
 `examples/three_nodes/` is the hub topology: `hub.ex` listens; `edge_a.ex` and `edge_c.ex` dial it, ask `:hub_in` to
 double a number and receive `{:reply, n}` on their own inbox. All three convert with no gap.

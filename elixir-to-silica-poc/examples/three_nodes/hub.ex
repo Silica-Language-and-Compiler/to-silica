@@ -14,8 +14,8 @@ defmodule Hub do
   @silica_node [
     name: :"hub@localhost",
     cookie_file: "cookie",
-    peer: {:"a@localhost", "127.0.0.1", :listen},
-    peer: {:"c@localhost", "127.0.0.1", :listen},
+    peer: {:"a@localhost", "localhost", :listen},
+    peer: {:"c@localhost", "localhost", :listen},
     local: {:hub_in, :request, [:atom, :integer]},
     remote: {:a_inbox, :"a@localhost", :reply, [:integer]},
     remote: {:c_inbox, :"c@localhost", :reply, [:integer]}

@@ -1,13 +1,12 @@
 [bees] mode=beam node=a@localhost transport=tcp auth=cookie creation=1 epmd=external epmd_port=4369 net_tick io_ms=60000 tick_ms=15000 link=hub@localhost role=dial via epmd frame_size_max=4294967295
 [bees] BEAM mode: Erlang cookie authentication, no encryption (transport tcp, 127.0.0.1); a downgrade from TRUST
+[bees] resolve localhost: ok 127.0.0.1
 [bees audit] epmd: found, dialing hub 0
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
 [bees audit] cookie digest accepted from hub@localhost 0
-[silica] root actor exited (no supervisor)
 [bees audit] handshake complete with hub@localhost 0
-[silica] root actor exited (no supervisor)
 a: the hub answered 42
-[silica] root actor exited (no supervisor)
+[bees audit] link down, proxies ended; reason closed 1
+[bees audit] frames delivered - 1
+[bees audit] frames dropped - 0
+[bees audit] control messages counted - 0
+[bees audit] net ticks seen (1 yes, 0 no) - 0

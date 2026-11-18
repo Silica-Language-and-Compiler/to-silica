@@ -76,7 +76,7 @@ Leave out `--mode transpile` for check mode, which validates the frames and stor
 ## Not in this repository
 
 The Silica compiler and standard library live in a sibling checkout (`../silica`; `SILICA` in `build.sh`). The sink is
-built with `silica-999909-macos-applesilicon` from its `binaries/` (the default of `build.sh` since 2026-11-16; BEES moved to it the same day). This repository only reads and runs them.
+built with `silica-999906-macos-applesilicon` from its `binaries/` (the default of `build.sh` since 2026-11-18; it was 999909 from 2026-11-16). This repository only reads and runs them.
 
 ## Documents
 
