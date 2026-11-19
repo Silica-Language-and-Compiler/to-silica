@@ -45,7 +45,36 @@ pub type Form {
     root: Int,
   )
   Entry(function: String, arity: Int)
+  /// Contract T9.17: the node this module runs on, the nodes it talks to and the registered names that cross.
+  NodeDecl(
+    name: String,
+    creation: Int,
+    listen_address: String,
+    listen_port: Int,
+    epmd_port: Int,
+    cookie_file: String,
+    net_ticktime_s: Int,
+    redial_initial_ms: Int,
+    redial_max_ms: Int,
+    peers: List(NodePeer),
+    remotes: List(NodeRemote),
+    locals: List(NodeLocal),
+  )
   Gap(name: String, file: String, line: Int, construct: String, note: String)
+}
+
+/// `role` is "dial" or "listen". `port` 0 means: look it up in EPMD.
+pub type NodePeer {
+  NodePeer(name: String, host: String, port: Int, role: String)
+}
+
+/// A registered name on `peer`; `fields` are the Silica type texts of the message's fields after its tag.
+pub type NodeRemote {
+  NodeRemote(name: String, peer: String, tag: String, fields: List(String))
+}
+
+pub type NodeLocal {
+  NodeLocal(name: String, tag: String, fields: List(String))
 }
 
 /// A type hint (contract 8.4). The policy is always `default`.

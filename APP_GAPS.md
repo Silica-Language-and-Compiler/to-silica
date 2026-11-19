@@ -6,6 +6,26 @@ mode and in transpile mode. The Silica output was exported with `tools/export_de
 `../silica/binaries/silica-999919-macos-applesilicon`. This file records every gap found. Nothing on the transpiler
 side was fixed in that first run; what has been fixed since is in the next section.
 
+## Three nodes that send messages to each other (2026-11-16, compiler 999909, BEES BEAM mode with EPMD)
+
+The inter-node gap of the earlier sections (`shout/1`, `is_distributed`: "by rule") is filled **as far as a send to a
+registered name and an answer to a registered name**; the rest stays a gap. Contract T9.17 (one `(:node)` form), the
+sink (writes `<unit>.wire` and `<unit>.bees.config`), the Erlang and Elixir senders, and a hub example in each
+language (`examples/three_nodes/`: `hub`, `edge_a`, `edge_c`).
+
+| What | State |
+| --- | --- |
+| Erlang hub, edge_a, edge_c sent to the sink (transpile) | `ok`, 0 gaps, 3 files each |
+| Elixir hub sent to the sink (transpile) | `ok`, 0 gaps, 3 files (the two Elixir edges were sent in check mode only: the sink's four regions were held by earlier unreleased sessions) |
+| the manifest and `bees.config` the sink wrote, for all three Erlang nodes | accepted by BEES's `tools/bees_config_beam.py generate` |
+| the three printed Erlang units | compile with 999909 (with `Supervisor.silica`); they cast `(:request, :a_inbox, 21)` to `:hub_in` and `(:reply, v)` to `:a_inbox`, the tuples BEES's proxies carry |
+| contract goldens | 27 of 27 against the new sink, with four new ones (`ok_node_declaration`, `reject_bad_node`, `ok_node_redial`, `reject_node_no_redial`) |
+| Gleam | **compiled and run 2026-11-18** (Gleam 1.19.2): 68 tests pass, the three examples transpile with no gap, and the three nodes ran live (42 and 68; `tools/node_kit/live_run_gleam_*.txt`). Its examples still write the peer host as `127.0.0.1` |
+| **a live run of three nodes** (hub and both edges, Erlang) | **done, 2026-11-17** (`tools/node_kit/`, `live_run_*.txt`): built with BEES's own check (no patch), EPMD lookup, cookie digest, handshake with both edges; `hub: request 21 from a_inbox`, `hub: request 34 from c_inbox`, `a: the hub answered 42`, `c: the hub answered 68`. BEES now takes a unit's `.atoms`, connects every `peer` line, and requires `redial` on a dialing node (the sink writes it: contract T9.17) |
+| still open | the root unit and start-up are written by `tools/node_kit/build_node.sh` with BEES's tools, not by the sink; the Erlang and Elixir examples name the peer host (`"localhost"` with an `epmd` lookup, BEES's Change 3; the Erlang and Elixir sets ran live with it on 2026-11-18; a dialing node is built with BEES's resolver edge, which `build_node.sh` adds); the three modules of the Gleam example do not talk to each other when run as Gleam on the BEAM (nothing starts distribution there); compiler 999906 since 2026-11-18 |
+| not carried | a send to a pid on another node, `spawn` on another node, monitors and links across nodes, `nodedown`, `rpc`, `global`: still gaps |
+| the answer to a request | the request carries the registered name to answer to (a field); the answering function chooses the send by it, in the source |
+
 ## Status after the Gleam examples reached no gap (2026-11-14, after the Elixir ones)
 
 | Program | Result | `counts.gaps` | Calls compared | Match | Mismatch | Fail in both |

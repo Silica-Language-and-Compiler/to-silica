@@ -146,6 +146,8 @@ module ts_print;
 use ts_text;
 
 export form_source/2;
+export node_text/1;
+export atom_manifest/1;
 export options_text/1;
 export unit_rest/6;
 export unit_notes/2;
@@ -3687,6 +3689,172 @@ fn function_source(f: $FUNCTION$, d: string) -> $PRINTED$ {
     }
 }
 
+// ------------------------------------------------------------------ a node declaration (contract T9.17)
+// The files of a node program in BEAM mode, which BEES reads (compiler guide N1, B1b): the manifest (`<unit>.wire`) and
+// `bees.config`. node_text answers "<manifest>\x1d<config>"; the transpile actor writes the two files. A name for a
+// message is the message's tag followed by its fields: the wire type is the tuple (atom, F1, ..., Fn), which is the
+// tagged tuple the unit's processes send and receive (contract T9.12), as BEES's manifest line states it.
+
+fn wire_type(fields: $LS$) -> string {
+    case fields of {
+        []: $LS$ -> "atom";
+        [_f: string, _t: $LS$] -> concat("(atom", concat(wire_fields(fields), ")"))
+    }
+}
+
+fn wire_fields(fields: $LS$) -> string {
+    case fields of {
+        []: $LS$ -> "";
+        [f: string, t: $LS$] -> ts_text@concat3(", ", f, wire_fields(t))
+    }
+}
+
+fn peer_lines(ps: $NODEPEERS$, epmd_port: int64) -> string {
+    case ps of {
+        []: $NODEPEERS$ -> "";
+        [p: $NODEPEER$, t: $NODEPEERS$] -> concat(ts_text@concat4(
+            ts_text@concat4("peer ", p.name, " ", p.host),
+            " ",
+            ts_text@itoa(case p.port == 0 of { true -> epmd_port; false -> p.port }),
+            case p.role == :dial of { true -> " dial\n"; false -> " listen\n" }), peer_lines(t, epmd_port))
+    }
+}
+
+fn remote_lines(rs: $NODEREMOTES$) -> string {
+    case rs of {
+        []: $NODEREMOTES$ -> "";
+        [r: $NODEREMOTE$, t: $NODEREMOTES$] -> concat(ts_text@concat4(ts_text@concat4("remote ", r.name, " @ ", r.peer), " cast ", wire_type(r.fields), "\n"), remote_lines(t))
+    }
+}
+
+fn local_lines(ls: $NODELOCALS$) -> string {
+    case ls of {
+        []: $NODELOCALS$ -> "";
+        [l: $NODELOCAL$, t: $NODELOCALS$] -> concat(ts_text@concat4("local ", l.name, " cast ", wire_type(l.fields)), concat("\n", local_lines(t)))
+    }
+}
+
+fn config_peers(ps: $NODEPEERS$, first: boolean) -> string {
+    case ps of {
+        []: $NODEPEERS$ -> "";
+        [p: $NODEPEER$, t: $NODEPEERS$] -> concat(ts_text@concat4(
+            case first of { true -> "\n            "; false -> ",\n            " },
+            ts_text@concat4("{\"", p.name, "\", [{host, \"", p.host),
+            ts_text@concat3("\"}, {port, ", case p.port == 0 of { true -> "epmd"; false -> ts_text@itoa(p.port) }, "}, {role, "),
+            case p.role == :dial of { true -> "dial}]}"; false -> "listen}]}" }), config_peers(t, false))
+    }
+}
+
+fn has_dial(ps: $NODEPEERS$) -> boolean {
+    case ps of {
+        []: $NODEPEERS$ -> false;
+        [p: $NODEPEER$, t: $NODEPEERS$] -> case p.role == :dial of { true -> true; false -> has_dial(t) }
+    }
+}
+
+// BEES has no default for redial (N2c): a node with a dial-role peer states it, a node without one must not.
+// initial_ms 0 is off; otherwise the delays of the redial actor (the first delay, and the most it grows to).
+fn redial_text(n: $NODEDECL$) -> string {
+    case has_dial(n.tables.peers) of {
+        false -> "";
+        true -> case n.timing.redial_initial_ms == 0 of {
+            true -> ", {redial, false}";
+            false -> ts_text@concat4(", {redial, true}, {redial_initial_ms, ", ts_text@itoa(n.timing.redial_initial_ms), "}, {redial_max_ms, ", concat(ts_text@itoa(n.timing.redial_max_ms), "}"))
+        }
+    }
+}
+
+fn manifest_text(n: $NODEDECL$) -> string {
+    concat(ts_text@concat4("# to-silica: the manifest of node ", n.name, " (BEAM mode: EPMD). Generated; do not edit.\nnode ", n.name),
+           concat(ts_text@concat3("\ncreation ", ts_text@itoa(n.timing.creation), "\n"), concat(peer_lines(n.tables.peers, n.net.epmd_port), concat(remote_lines(n.tables.remotes), local_lines(n.tables.locals)))))
+}
+
+fn config_text(n: $NODEDECL$) -> string {
+    concat(ts_text@concat4("%% to-silica: bees.config of node ", n.name, " (BEAM mode, cookie, EPMD on port ", ts_text@itoa(n.net.epmd_port)),
+        concat(ts_text@concat3("). Generated; do not edit.\n[ {mode, beam},\n  {node, [{name, \"", n.name, "\"}]},\n  {beam, [{transport, tcp}, {auth, cookie}, {cookie_file, \""),
+        concat(ts_text@concat4(n.net.cookie_file, "\"}, {listen_address, \"", n.net.listen_address, "\"},\n          {listen_port, "),
+        concat(ts_text@concat4(ts_text@itoa(n.net.listen_port), "}, {epmd, external}, {epmd_port, ", ts_text@itoa(n.net.epmd_port), "}, {net_ticktime_s, "),
+        concat(ts_text@concat3(ts_text@itoa(n.timing.net_ticktime_s), "}", redial_text(n)), concat(",\n          {peers, [", concat(config_peers(n.tables.peers, true), "]}]} ].\n")))))))
+}
+
+fn node_text(n: $NODEDECL$) -> string {
+    concat(manifest_text(n), concat("\x1d", config_text(n)))
+}
+
+// ------------------------------------------------------------------ the atoms of a unit (BEES compiler guide A1.2)
+// atom_manifest answers the unit's `<unit>.atoms` manifest: every atom spelling the printed Silica writes as a literal,
+// one for each line, each once. BEES generates its `bees_atoms` from the manifests of a program's units, so the atoms
+// exist at both ends (the printed unit and the BEES units), and its check (tools/bees_config.py check) accepts the
+// atoms a manifest lists. Comments and strings are skipped; a `:` is an atom when a letter follows and what precedes
+// it is not an identifier character, `:`, `"` or `'` (the rule of BEES's own check).
+
+fn atom_letter(b: int64) -> boolean {
+    (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95
+}
+
+fn atom_char(b: int64) -> boolean {
+    atom_letter(b) or (b >= 48 and b <= 57)
+}
+
+fn atom_end(s: string, i: int64, n: int64) -> int64 {
+    case i >= n of {
+        true -> n;
+        false -> {
+            b: int64 <- ts_text@at(s, i);
+            case atom_char(b) of {
+                true -> atom_end(s, i + 1, n);
+                false -> i
+            }
+        }
+    }
+}
+
+fn add_atom(acc: string, name: string) -> string {
+    case contains(acc, ts_text@concat3("\n", name, "\n")) of {
+        true -> acc;
+        false -> ts_text@concat3(acc, name, "\n")
+    }
+}
+
+// mode: 0 code, 1 inside a string, 2 inside a line comment
+fn atoms_scan(s: string, i: int64, n: int64, mode: int64, acc: string) -> string {
+    case i >= n of {
+        true -> acc;
+        false -> {
+            b: int64 <- ts_text@at(s, i);
+            nb: int64 <- case i + 1 < n of { true -> ts_text@at(s, i + 1); false -> 0 };
+            pb: int64 <- case i > 0 of { true -> ts_text@at(s, i - 1); false -> 32 };
+            case mode == 1 of {
+                true -> case b == 92 of {
+                    true -> atoms_scan(s, i + 2, n, 1, acc);
+                    false -> atoms_scan(s, i + 1, n, case b == 34 of { true -> 0; false -> 1 }, acc)
+                };
+                false -> case mode == 2 of {
+                    true -> atoms_scan(s, i + 1, n, case b == 10 of { true -> 0; false -> 2 }, acc);
+                    false -> case b == 34 of {
+                        true -> atoms_scan(s, i + 1, n, 1, acc);
+                        false -> case b == 47 and nb == 47 of {
+                            true -> atoms_scan(s, i + 2, n, 2, acc);
+                            false -> case b == 58 and atom_letter(nb) and not atom_char(pb) and pb != 58 and pb != 34 and pb != 39 of {
+                                true -> {
+                                    e: int64 <- atom_end(s, i + 1, n);
+                                    atoms_scan(s, e, n, 0, add_atom(acc, substring(s, i + 1, e)))
+                                };
+                                false -> atoms_scan(s, i + 1, n, 0, acc)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn atom_manifest(text: string) -> string {
+    all: string <- atoms_scan(text, 0, length_bytes(text), 0, "\n");
+    substring(all, 1, length_bytes(all))
+}
+
 // One form's Silica text; see the header for what the answer's fields mean.
 // A (:type) form (contract T8.14). Silica has no type names: the declaration is written out wherever a later form
 // names it, so what is kept is `decl`, the entry the transpile actor adds to the session's declared types.
@@ -3711,6 +3879,7 @@ fn form_source(body: $BODY$, decls: string) -> $PRINTED$ {
         (:function, f: $FUNCTION$) -> function_source(f, decls);
         (:type, t: $TYPEDECL$) -> type_source(t, decls);
         (:entry, e: $ENTRY$) -> refused(ts_text@concat3(e.function, "/", ts_text@itoa(e.arity)), "T4002", "the entry point is not printed by form_source: the transpile actor writes main with ts_print@main_source when the entry function is printed", { file: "", line: 0, column: 0 });
+        (:node, n: $NODEDECL$) -> refused(n.name, "T4002", "a node declaration is not Silica: the transpile actor writes its manifest and bees.config (contract T9.17)", { file: "", line: 0, column: 0 });
         (:gap, g: $FORMGAP$) -> refused("", "T4001", concat(ts_text@concat4("the sender sent the form as a gap: ", g.construct, " (", g.note), ")"), { file: g.place.file, line: g.place.line, column: 0 })
     }
 }

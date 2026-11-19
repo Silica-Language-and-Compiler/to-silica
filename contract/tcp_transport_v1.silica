@@ -144,6 +144,11 @@ fn decode_to_transpiler(frame: string) -> (:ok,
                     (:t_var, string)
                 , mem(normal)],
                 root: int64 }) |
+            (:node, { name: string, timing: { creation: int64, net_ticktime_s: int64, redial_initial_ms: int64, redial_max_ms: int64 },
+                          net: { listen_address: string, listen_port: int64, epmd_port: int64, cookie_file: string },
+                          tables: { peers: List[{ name: string, host: string, port: int64, role: :dial | :listen }, mem(normal)],
+                                    remotes: List[{ name: string, peer: string, tag: string, fields: List[string, mem(normal)] }, mem(normal)],
+                                    locals: List[{ name: string, tag: string, fields: List[string, mem(normal)] }, mem(normal)] } }) |
             (:entry, { function: string, arity: int64 }) |
             (:gap, { name: string, place: { file: string, line: int64 }, construct: string, note: string })
         }) |
@@ -263,6 +268,11 @@ fn decode_to_transpiler(frame: string) -> (:ok,
                             (:t_var, string)
                         , mem(normal)],
                         root: int64 }) |
+                    (:node, { name: string, timing: { creation: int64, net_ticktime_s: int64, redial_initial_ms: int64, redial_max_ms: int64 },
+                                  net: { listen_address: string, listen_port: int64, epmd_port: int64, cookie_file: string },
+                                  tables: { peers: List[{ name: string, host: string, port: int64, role: :dial | :listen }, mem(normal)],
+                                            remotes: List[{ name: string, peer: string, tag: string, fields: List[string, mem(normal)] }, mem(normal)],
+                                            locals: List[{ name: string, tag: string, fields: List[string, mem(normal)] }, mem(normal)] } }) |
                     (:entry, { function: string, arity: int64 }) |
                     (:gap, { name: string, place: { file: string, line: int64 }, construct: string, note: string })
                 }) |
@@ -438,6 +448,11 @@ fn check_to_transpiler(frame: string) -> atom {
                         (:t_var, string)
                     , mem(normal)],
                     root: int64 }) |
+                (:node, { name: string, timing: { creation: int64, net_ticktime_s: int64, redial_initial_ms: int64, redial_max_ms: int64 },
+                              net: { listen_address: string, listen_port: int64, epmd_port: int64, cookie_file: string },
+                              tables: { peers: List[{ name: string, host: string, port: int64, role: :dial | :listen }, mem(normal)],
+                                        remotes: List[{ name: string, peer: string, tag: string, fields: List[string, mem(normal)] }, mem(normal)],
+                                        locals: List[{ name: string, tag: string, fields: List[string, mem(normal)] }, mem(normal)] } }) |
                 (:entry, { function: string, arity: int64 }) |
                 (:gap, { name: string, place: { file: string, line: int64 }, construct: string, note: string })
             }) |

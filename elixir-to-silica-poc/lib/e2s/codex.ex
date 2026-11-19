@@ -232,7 +232,10 @@ defmodule E2s.Codex do
     # function of the module (E2s.Lift: the transpiler prints no closure).
     {lifted_forms, lifted} = E2s.Lift.forms(E2s.Sup.forms(body_forms(body), name))
     {forms, gen} = E2s.Split.forms(lifted_forms, name)
-    env = env(name, file, forms, strict, gen, lifted)
+    # A node program (contract T9.17): the module's -silica_node declaration, sent as one (:node) form.
+    {node_decl, remotes} = E2s.Node.forms(body_forms(body))
+    node_form = if node_decl, do: [node_decl], else: []
+    env = Map.put(env(name, file, forms, strict, gen, lifted), :remotes, remotes)
 
     entry =
       case env.defs[{:main, 0}] do
@@ -240,7 +243,7 @@ defmodule E2s.Codex do
         clauses -> if Enum.any?(clauses, &(&1.kind == :def)), do: [{:entry, %{function: fname(:main, 0, env), arity: 0}}], else: []
       end
 
-    bodies = types_first(forms(forms, env)) ++ entry ++ extra
+    bodies = node_form ++ types_first(forms(forms, env)) ++ entry ++ extra
 
     {frames, next} =
       Enum.map_reduce(bodies, seq0 + 1, fn body, seq ->
@@ -2202,8 +2205,20 @@ defmodule E2s.Codex do
   # H22. T8.10 (e): the message needs a stated type. The value of a send is the message.
   defp builtin(:send, [to, message], meta, _label, b) do
     case to do
+      # `send({name, node}, message)` to a name that @silica_node declares as a remote: H39 (:send_named), which the
+      # transpiler writes as a cast to the registered name; BEES's proxy for the name carries it to the peer (T9.17).
+      {:__block__, _, [{{:__block__, _, [name]}, {:__block__, _, [node]}}]} when is_atom(name) and is_atom(node) ->
+        if Map.has_key?(Map.get(b.env, :remotes, %{}), {Atom.to_string(name), Atom.to_string(node)}) do
+          {m, b} = tr(message, :expr, b)
+          {m, b} = need(m, "message of a send", b)
+          {i, b} = emit(:send_named, meta, [Atom.to_string(name), m], b)
+          {i, typed(b, i, t(b, m), strength(b, m))}
+        else
+          gap(meta, "send to a process on another node", "the name and node are not declared as a remote in @silica_node (a send to a pid on another node has no meaning: BEES sends to registered names)", b)
+        end
+
       {:__block__, _, [{_, _}]} ->
-        gap(meta, "send to a process on another node", @inter_node, b)
+        gap(meta, "send to a process on another node", "inter-node communication is sent only as send({name, node}, message) with name and node atoms declared as a remote in @silica_node (contract T9.17)", b)
 
       # H39: a send to a registered name. Its value is the message, as a send's is (T9.14c).
       {:__block__, _, [name]} when is_atom(name) ->

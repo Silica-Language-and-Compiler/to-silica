@@ -231,6 +231,86 @@ fn form(body: Form) -> Dynamic {
           #("root", dynamic.int(root)),
         ]),
       ])
+    frame.NodeDecl(
+      name:,
+      creation:,
+      listen_address:,
+      listen_port:,
+      epmd_port:,
+      cookie_file:,
+      net_ticktime_s:,
+      redial_initial_ms:,
+      redial_max_ms:,
+      peers:,
+      remotes:,
+      locals:,
+    ) ->
+      tagged("node", [
+        record([
+          #("name", dynamic.string(name)),
+          #(
+            "timing",
+            record([
+              #("creation", dynamic.int(creation)),
+              #("net_ticktime_s", dynamic.int(net_ticktime_s)),
+              #("redial_initial_ms", dynamic.int(redial_initial_ms)),
+              #("redial_max_ms", dynamic.int(redial_max_ms)),
+            ]),
+          ),
+          #(
+            "net",
+            record([
+              #("listen_address", dynamic.string(listen_address)),
+              #("listen_port", dynamic.int(listen_port)),
+              #("epmd_port", dynamic.int(epmd_port)),
+              #("cookie_file", dynamic.string(cookie_file)),
+            ]),
+          ),
+          #(
+            "tables",
+            record([
+              #(
+                "peers",
+                dynamic.list(
+                  list.map(peers, fn(p) {
+                    record([
+                      #("name", dynamic.string(p.name)),
+                      #("host", dynamic.string(p.host)),
+                      #("port", dynamic.int(p.port)),
+                      #("role", term.atom(p.role)),
+                    ])
+                  }),
+                ),
+              ),
+              #(
+                "remotes",
+                dynamic.list(
+                  list.map(remotes, fn(r) {
+                    record([
+                      #("name", dynamic.string(r.name)),
+                      #("peer", dynamic.string(r.peer)),
+                      #("tag", dynamic.string(r.tag)),
+                      #("fields", term.strings(r.fields)),
+                    ])
+                  }),
+                ),
+              ),
+              #(
+                "locals",
+                dynamic.list(
+                  list.map(locals, fn(l) {
+                    record([
+                      #("name", dynamic.string(l.name)),
+                      #("tag", dynamic.string(l.tag)),
+                      #("fields", term.strings(l.fields)),
+                    ])
+                  }),
+                ),
+              ),
+            ]),
+          ),
+        ]),
+      ])
     frame.Entry(function:, arity:) ->
       tagged("entry", [
         record([

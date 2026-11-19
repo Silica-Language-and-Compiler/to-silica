@@ -5,6 +5,7 @@
 module ts_text;
 
 export itoa/1;
+export at/2;
 export atoi/1;
 export find/3;
 export fresh/1;

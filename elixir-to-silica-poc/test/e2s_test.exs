@@ -1767,6 +1767,53 @@ defmodule E2sTest do
     end
   end
 
+  describe "examples/three_nodes, a node program (E2s.Node, contract T9.17)" do
+    setup do
+      %{
+        hub: Codex.frames(["examples/three_nodes/hub.ex"], :check),
+        a: Codex.frames(["examples/three_nodes/edge_a.ex"], :check),
+        c: Codex.frames(["examples/three_nodes/edge_c.ex"], :check)
+      }
+    end
+
+    test "every frame of the three programs passes check_frame, and none is a gap", %{hub: hub, a: a, c: c} do
+      for frames <- [hub, a, c] do
+        for frame <- frames, do: assert(:check_frame.check(frame) == :ok, "#{inspect(frame, limit: 6)}")
+        assert gaps(frames) == 0
+      end
+    end
+
+    test "@silica_node is one (:node) form: the hub listens for a and c, which EPMD finds (port 0)", %{hub: hub} do
+      assert [{:node, node}] = for({:form, %{body: {:node, _} = body}} <- hub, do: body)
+      assert node.name == "hub@localhost"
+      assert node.net.epmd_port == 4369
+      assert for(p <- node.tables.peers, do: {p.name, p.role, p.port}) == [{"a@localhost", :listen, 0}, {"c@localhost", :listen, 0}]
+      assert [%{name: "hub_in", tag: "request", fields: ["atom", "int64"]}] = node.tables.locals
+      assert for(r <- node.tables.remotes, do: {r.name, r.peer, r.tag}) == [{"a_inbox", "a@localhost", "reply"}, {"c_inbox", "c@localhost", "reply"}]
+    end
+
+    test "send({name, node}, message) to a declared remote is H39 (:send_named)", %{hub: hub, a: a} do
+      assert for({:send_named, _, name, _} <- nodes(hub), do: name) |> Enum.sort() == ["a_inbox", "c_inbox"]
+      assert for({:send_named, _, name, _} <- nodes(a), do: name) == ["hub_in"]
+    end
+
+    test "a send to a node that is not declared is a gap that says so" do
+      source = """
+      defmodule Nn do
+        @spec f() :: :ok
+        def f do
+          send({:x, :"z@nowhere"}, {:hello, 1})
+          :ok
+        end
+      end
+      """
+
+      frames = Codex.string(source, "nn.ex")
+      assert [{:gap_node, _, _, note}] = for({:gap_node, _, _, _} = n <- nodes(frames), do: n)
+      assert note =~ "@silica_node"
+    end
+  end
+
   describe "online" do
     unless System.get_env("TO_SILICA_PORT") do
       @tag skip: "TO_SILICA_PORT is not set: the check-mode session with a transpiler did not run"

@@ -346,6 +346,42 @@ form gap, and `init/1` and the start function are sent as the functions they are
 - **The start function is not run.** Only its `spawn_link` and `register` are read: anything else it does is a
   reason not to read the supervisor.
 
+## A node program: three nodes that send messages to each other
+
+**What this sender maps** (contract T9.17, added 2026-11-16). One Erlang module is one node. `-silica_node([...])`
+declares the node, the nodes it talks to and the registered names that cross; the sender sends it as one `(:node)`
+form and the transpiler writes BEES's manifest and `bees.config` (BEAM mode: EPMD and a cookie) beside the unit.
+`{Name, Node} ! Message` to a name the attribute declares as a remote is sent as `(:send_named)` (H39), the same node
+as a send to a local name: BEES registers a proxy under the remote name.
+
+```erlang
+-silica_node([{name, 'hub@localhost'},                         %% this node
+              {cookie_file, "cookie"},
+              {peer, 'a@localhost', "localhost", listen},       %% a node it talks to; listen or dial
+              {local, hub_in, request, [atom, integer]},        %% a registered name here: {request, Atom, Integer}
+              {remote, a_inbox, 'a@localhost', reply, [integer]}]).  %% a name there: {reply, Integer}
+%% {redial, off} | {redial, InitialMs, MaxMs}: on a node with a dial peer (BEES has no default); not on one without
+%% optional: {creation, N} {listen_address, S} {listen_port, N} {epmd_port, N} {net_ticktime_s, N}
+```
+
+A field kind is `integer | float | atom | boolean | binary` (what the fields after the tag are; Erlang's messages have
+no declared type, so the attribute states it, contract 8.6). The message is the tuple `{Tag, Field...}`. A pid does
+not cross a node: **a request names the registered name its answer is to go to** (an atom field), and the answering
+process picks the send by that field, as `answer/2` of `examples/three_nodes/hub.erl` does.
+
+`examples/three_nodes/` is the hub topology: `hub.erl` listens, `edge_a.erl` and `edge_c.erl` dial it, each edge asks
+the hub's `hub_in` to double a number and receives `{reply, N}` on its own inbox. All three convert with no gap.
+
+| | Sent as a gap |
+| --- | --- |
+| `Pid ! Message` to a pid on another node, `spawn/4` on another node, `monitor_node`, `net_kernel`, `global`, `rpc` | yes (no meaning: BEES sends to registered names) |
+| `{Name, Node} ! Message` for a name or node `-silica_node` does not declare as a remote | yes, with a note that says so |
+
+BEES connects every `peer` line (a hub holds a link to each edge). A peer host is a name or an IPv4 literal: with
+the `epmd` port BEES resolves the name on each dial, then asks that host's EPMD, so the examples write `"localhost"`
+(run live 2026-11-18). An IPv6 literal is refused by BEES's `bees_config_beam.py`. The attribute is
+ignored by Erlang itself: the three modules also run on stock Erlang nodes (`erl -sname hub`, and so on).
+
 ## Decisions and limits a reader should know
 
 - **Alias patterns.** `f(T = #tally{total = N})` is sent as `(:match, at, T, #tally{…})` where a pattern is

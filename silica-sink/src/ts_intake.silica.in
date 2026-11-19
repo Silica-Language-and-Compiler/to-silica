@@ -49,6 +49,7 @@ fn form_name(body: $BODY$) -> string {
         (:function, f: $FUNCTION$) -> ts_text@concat3(f.head.name, "/", ts_text@itoa(f.head.arity));
         (:type, d: $TYPEDECL$) -> d.head.name;
         (:entry, e: $ENTRY$) -> concat("entry ", e.function);
+        (:node, n: $NODEDECL$) -> concat("node ", ts_print@node_text(n));
         (:gap, g: $FORMGAP$) -> g.name
     }
 }

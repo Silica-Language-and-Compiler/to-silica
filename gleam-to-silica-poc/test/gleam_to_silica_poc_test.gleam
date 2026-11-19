@@ -3455,3 +3455,152 @@ pub fn bound(n: Int) -> Int {
   assert list.contains(kinds("closure"), "Lambda")
   assert list.contains(kinds("bound"), "Lambda")
 }
+
+// ------------------------------------------------------------ node programs
+
+const three_nodes = ["hub", "edge_a", "edge_c"]
+
+fn three_nodes_frames(module: String) -> List(Frame) {
+  let file = "examples/three_nodes/" <> module <> ".gleam"
+  let assert Ok(text) = simplifile.read(file)
+  let assert Ok(frames) = codex.session([Source(file, text)], frame.Check)
+  frames
+}
+
+fn node_form(frames: List(Frame)) -> frame.Form {
+  let assert [node] =
+    list.filter(forms(frames), fn(form) {
+      case form {
+        frame.NodeDecl(..) -> True
+        _ -> False
+      }
+    })
+  node
+}
+
+/// test/three_nodes/ holds the copies `gleam test` compiles: the node
+/// programs are Gleam that type-checks.
+pub fn three_nodes_are_the_compiled_copies_test() {
+  list.each(three_nodes, fn(module) {
+    let assert Ok(shown) =
+      simplifile.read("examples/three_nodes/" <> module <> ".gleam")
+    let assert Ok(compiled) =
+      simplifile.read("test/three_nodes/" <> module <> ".gleam")
+    assert shown == compiled
+  })
+}
+
+/// Contract T9.17: every frame of a node program has the schema's shape (the
+/// (:node) form included), there is no gap, the entry is run/0 and not main/0
+/// (no entry form: BEES owns main), and the functions the declaration names
+/// as remote sends are not sent.
+pub fn three_nodes_frames_test() {
+  list.each(three_nodes, fn(module) {
+    let frames = three_nodes_frames(module)
+    list.each(frames, fn(f) {
+      let decoded = term.decode(wire.encode(f))
+      assert decoded == wire.to_term(f)
+      assert check_frame(decoded) == atom("ok")
+    })
+    assert int.sum(list.map(frames, frame.gaps)) == 0
+    assert gap_constructs(nodes(frames)) == []
+    let names =
+      list.filter_map(forms(frames), fn(form) {
+        case form {
+          frame.Function(name:, ..) -> Ok(name)
+          frame.Gap(name:, ..) -> Ok("gap " <> name)
+          _ -> Error(Nil)
+        }
+      })
+    assert list.contains(names, "run")
+    assert !list.any(names, fn(name) {
+      string.starts_with(name, "send_") || string.starts_with(name, "gap ")
+    })
+    assert !list.any(forms(frames), fn(form) {
+      case form {
+        frame.Entry(..) -> True
+        _ -> False
+      }
+    })
+  })
+}
+
+/// The hub's declaration, and its two sends to names on other nodes (H39).
+pub fn hub_node_declaration_test() {
+  let frames = three_nodes_frames("hub")
+  assert node_form(frames)
+    == frame.NodeDecl(
+      name: "hub@localhost",
+      creation: 1,
+      listen_address: "127.0.0.1",
+      listen_port: 0,
+      epmd_port: 4369,
+      cookie_file: "cookie",
+      net_ticktime_s: 60,
+      redial_initial_ms: -1,
+      redial_max_ms: -1,
+      peers: [
+        frame.NodePeer("a@localhost", "127.0.0.1", 0, "listen"),
+        frame.NodePeer("c@localhost", "127.0.0.1", 0, "listen"),
+      ],
+      remotes: [
+        frame.NodeRemote("a_inbox", "a@localhost", "reply", ["int64"]),
+        frame.NodeRemote("c_inbox", "c@localhost", "reply", ["int64"]),
+      ],
+      locals: [frame.NodeLocal("hub_in", "request", ["string", "int64"])],
+    )
+  let sends =
+    list.filter_map(nodes(frames), fn(node) {
+      case node {
+        frame.SendNamed(name:, ..) -> Ok(name)
+        _ -> Error(Nil)
+      }
+    })
+  assert sends == ["a_inbox", "c_inbox"]
+}
+
+/// An edge dials, so it states its redial; its request is a send to hub_in.
+pub fn edge_node_declaration_test() {
+  let frames = three_nodes_frames("edge_a")
+  let assert frame.NodeDecl(
+    name: "a@localhost",
+    redial_initial_ms: 250,
+    redial_max_ms: 4000,
+    peers: [frame.NodePeer("hub@localhost", "127.0.0.1", 0, "dial")],
+    remotes: [
+      frame.NodeRemote("hub_in", "hub@localhost", "request", [
+        "string",
+        "int64",
+      ]),
+    ],
+    locals: [frame.NodeLocal("a_inbox", "reply", ["int64"])],
+    ..,
+  ) = node_form(frames)
+  assert list.any(nodes(frames), fn(node) {
+    case node {
+      frame.SendNamed(name: "hub_in", ..) -> True
+      _ -> False
+    }
+  })
+}
+
+/// `redial off` is 0 and 0; no node declaration without a `name` line.
+pub fn node_redial_off_test() {
+  let frames =
+    unit_of(
+      "//@silica_node name a@localhost
+//@silica_node peer hub@localhost 127.0.0.1 dial
+//@silica_node redial off
+pub fn one() -> Int { 1 }
+",
+    )
+  let assert frame.NodeDecl(redial_initial_ms: 0, redial_max_ms: 0, ..) =
+    node_form(frames)
+  let plain = unit_of("//@silica_node redial off\npub fn one() -> Int { 1 }\n")
+  assert !list.any(forms(plain), fn(form) {
+    case form {
+      frame.NodeDecl(..) -> True
+      _ -> False
+    }
+  })
+}

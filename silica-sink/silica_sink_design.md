@@ -700,9 +700,9 @@ to-silica/
   silica-sink/
     silica_sink_design.md     this document
     STATUS.md                    what is built, what was run, what failed and why
-    build.sh                     builds the application (four compiler runs, §10 question 12)
+    build.sh                     builds the application (one compiler run over every unit, §10 question 12)
     src/                         the Silica application: *.silica.in are spelled out into the build directory;
-                                 ts_text, ts_out, ts_config are plain units; stubs/ are interface-only copies;
+                                 ts_text, ts_out, ts_config are plain units;
                                  process_runtime.silica.tmpl and process_main.silica.tmpl are the Silica the
                                  printer writes into a unit with processes (§5.5)
     tools/expand.py              spells out the contract's types and the pools in the sources, and the two

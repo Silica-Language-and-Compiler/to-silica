@@ -255,6 +255,7 @@ Policy = :trust | :check | :advisory
 | `:profile` | a construct the session's profile does not allow (§7.4) |
 | `:low_level` | a low-level construct outside its rules (§9.5) |
 | `:bad_hint` | a hint on a node that cannot carry one, or a type index out of range (§8) |
+| `:bad_node` | a node declaration (T9.17) whose name, port, tick time, redial, peer, registered name, tag or field type is not allowed, or a remote that names a peer the declaration does not list |
 
 - **T5.6** A refusal (R2) has one of: `:contract` (a version the transpiler does not serve), `:session_mismatch`,
   `:unknown_session` (a resume names a session the transpiler does not hold), `:busy` (every storage region holds a
@@ -909,6 +910,51 @@ you must send for it. A node outside these rules is not written: its function be
     a process that traps exits and its `spawn_link` as an unlinked `(:spawn)` of a copy of the child's function
     that sends its parent the message `{'EXIT', self(), Reason}` when it ends by a value or by an `exit(Atom)`
     written in the source (`erlang-to-silica-poc/README.md`, "Processes: what this sender splits").
+
+- **T9.17** **A node program: several nodes that send messages to each other** (added 2026-11-16; BEES BEAM mode with
+  EPMD). One program is one node. A sender that knows the node its source runs on sends **one `(:node, NodeDecl)`
+  form** in the unit that holds the program's functions (any position among the forms; one per session; a second is
+  ignored). It carries no code. The transpiler writes **two files beside the unit's**, which BEES reads
+  (BEES compiler guide N1 and B1b):
+
+  | Field | Meaning | In the output |
+  | --- | --- | --- |
+  | `name` | the node's name, `hub@localhost` (short name: BEAM mode) | `node` line; `bees.config` `{node, [{name, ...}]}` |
+  | `timing.creation` | an integer, normally 1 | `creation` line |
+  | `net.listen_address`, `net.listen_port` | where this node listens; port 0 is ephemeral, registered with EPMD | `{listen_address, ..}`, `{listen_port, ..}` |
+  | `net.epmd_port` | the EPMD's port, 4369 for OTP's | `{epmd, external}`, `{epmd_port, ..}`; a peer's port is looked up there (`{port, epmd}`) |
+  | `net.cookie_file` | the file holding the shared cookie | `{auth, cookie}`, `{cookie_file, ..}` |
+  | `timing.net_ticktime_s` | 4 to 3600 (OTP's default 60) | `{net_ticktime_s, ..}` |
+| `timing.redial_initial_ms`, `timing.redial_max_ms` | BEES has no default for redial (its N2c), so the node states it: on a node with a `dial` peer, both `0` (a lost link stays down: `{redial, false}`) or the first delay 10 to 60000 and the most it grows to, from the first delay to 600000 (`{redial, true}, {redial_initial_ms, ..}, {redial_max_ms, ..}`); on a node with no `dial` peer, both `-1` (not stated), because BEES refuses redial there. Anything else is `:bad_node` | `{redial, ..}` in the `beam` list |
+  | `tables.peers` | `{ name, host, port, role: :dial \| :listen }` for each node this one talks to; `port` 0 means "through EPMD". `host` is an address or a name BEES resolves | `peer` lines, and `{peers, [...]}` in `bees.config` |
+  | `tables.remotes` | `{ name, peer, tag, fields }`: a registered name on `peer`; a send to it is a cast | `remote <name> @ <peer> cast (atom, F1, ...)` |
+  | `tables.locals` | `{ name, tag, fields }`: a registered name here that a peer may cast to | `local <name> cast (atom, F1, ...)` |
+
+  (The fields are grouped in records of at most four because Silica's derived decoder takes no more: `contract/tools/README.md`.)
+
+  The files are `<silica_unit>.wire` (the manifest), `<silica_unit>.bees.config` and `<silica_unit>.atoms` (every atom the unit writes as a literal, one a line: BEES compiler guide A1.2, so that the atoms exist in the unit and in BEES's `bees_atoms`; written for every unit of a session that has a node declaration). The mode is always BEAM mode with
+  `{epmd, external}` and a cookie (TRUST mode is not written). `fields` are Silica type texts of BEES's wire subset
+  (wire-v1 5.3: `int64`, `float64`, `boolean`, `atom`, `string`, ...), one for each field of the message after the tag;
+  the sender states every field's type (§8.6) and the transpiler checks only the characters (`:bad_node`).
+  - **What crosses is a registered name and a tagged tuple.** A message to a remote name is `{tag, field, ...}`, the
+    tagged tuple of T9.12; BEES's wire carries it as the tuple `(atom, field, ...)`, the same value, so a process
+    that receives under a `local` name needs no adapter. **Send it as `(:send_named, name, message)`** (H39, T9.14c): a
+    remote name is written exactly as a local one, because BEES registers a proxy under it (BEES N1). A pid does not
+    cross a node; a request names the registered name its answer is to go to, as an atom or text field, and the
+    answering process chooses the `(:send_named)` to the remote name by that field (BEES N4: no call across nodes).
+  - **A remote name is not checked against the declaration.** `(:send_named)` is written the same whether the name is
+    local, a static child, or declared remote; a name nobody registered ends the sender (T9.14c). A `local` name
+    needs a process registered under it (T9.14b): BEES does not (compiler guide N2.3).
+  - **Not built here** (reported as gaps by the senders): sending to a pid on another node, `spawn` on another node,
+    monitors and links across nodes, `nodedown`, `net_kernel`, `global`, `rpc`.
+  - **What the output is not.** The files are the node's configuration; the node's root unit, its start-up and the
+    TCP carrier are BEES's (`tools/bees_edge_gen.py`, compiler guide N2.1 and N2.2); `tools/node_kit/build_node.sh`
+    writes them for a unit the sink printed. BEES owns `main`, so a node program's entry is a function other than
+    `main/0` (the examples use `run/0`), which the root starts. BEES connects **every `peer`
+    line** (BEAM mode, BEES N2b): a `dial` peer is dialed, and all `listen` peers share the node's one listener, so a hub
+    holds a link to each of its edges (run live 2026-11-17). A peer host is an IPv4 literal or a name; a node that dials
+    a name is built with BEES's resolver edge (`bees_edge_gen.py --resolve`, which `build_node.sh` adds; run live
+    2026-11-18).
 
 ### 9.5 Nodes: the low-level vocabulary
 

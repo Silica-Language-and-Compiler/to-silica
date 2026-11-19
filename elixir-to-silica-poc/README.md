@@ -509,6 +509,36 @@ examples have none. A construct
 the split does not cut and an `IO` call it does not lower are gaps of the sender too, with their own notes
 ("Processes: what this sender splits").
 
+## A node program: three nodes that send messages to each other
+
+**What this sender maps** (contract T9.17, added 2026-11-16; `lib/e2s/node.ex`). One Elixir module is one node.
+`@silica_node [...]` declares the node, the nodes it talks to and the registered names that cross; the sender sends it
+as one `(:node)` form and the transpiler writes BEES's manifest and `bees.config` (BEAM mode: EPMD and a cookie)
+beside the unit. `send({:name, :"node@host"}, message)` to a name the attribute declares as a remote is sent as
+`(:send_named)` (H39), the same node as a send to a local name.
+
+```elixir
+@silica_node [
+  name: :"hub@localhost",                                    # this node
+  cookie_file: "cookie",
+  peer: {:"a@localhost", "localhost", :listen},               # a node it talks to; :listen or :dial
+  local: {:hub_in, :request, [:atom, :integer]},              # a registered name here: {:request, atom, integer}
+  remote: {:a_inbox, :"a@localhost", :reply, [:integer]}      # a name there: {:reply, integer}
+]
+# redial: :off | {initial_ms, max_ms} on a node with a dial peer (BEES has no default); not on one without
+# optional: creation:, listen_address:, listen_port:, epmd_port:, net_ticktime_s:
+```
+
+A field kind is `:integer | :float | :atom | :boolean | :binary`. A pid does not cross a node: **a request names the
+registered name its answer is to go to**, and the answering function picks the send by that field (`answer/2` of
+`examples/three_nodes/hub.ex`). A send to a pid on another node, `Node.spawn`, `:erpc`, `:global` stay gaps. A send to
+a name or node the attribute does not declare is a gap that says so. BEES's limits are the Erlang sender's
+(README there): every `peer` line is a link, and a peer host is a name (the examples write `"localhost"`; run live
+2026-11-18) or an IPv4 literal.
+
+`examples/three_nodes/` is the hub topology: `hub.ex` listens; `edge_a.ex` and `edge_c.ex` dial it, ask `:hub_in` to
+double a number and receive `{:reply, n}` on their own inbox. All three convert with no gap.
+
 ## How to run
 
 Needs Elixir 1.15 or later (built with 1.20.5 on OTP 29).

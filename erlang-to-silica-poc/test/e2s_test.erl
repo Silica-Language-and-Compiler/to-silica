@@ -27,10 +27,12 @@ main() -> main([]).
 
 main(Args) ->
     Online = case Args of
-                 [Port] -> online(list_to_integer(atom_to_list(Port)));
+                 %% -s gives the port as an atom, -run gives it as a string: both are read.
+                 [Port] when is_atom(Port) -> online(list_to_integer(atom_to_list(Port)));
+                 [Port] when is_list(Port) -> online(list_to_integer(Port));
                  [] -> io:format("(no port given: the online part did not run)~n"), []
              end,
-    Results = mappings() ++ typing() ++ split() ++ supervisor() ++ names() ++ demo() ++ actors() ++ flow() ++ release() ++ Online,
+    Results = mappings() ++ typing() ++ split() ++ supervisor() ++ names() ++ demo() ++ actors() ++ node_program() ++ flow() ++ release() ++ Online,
     [io:format("~s  ~s~n", [case Ok of true -> "ok  "; false -> "FAIL"; transpiler_fault -> "TRANSPILER FAULT" end, Name])
      || {Name, Ok} <- Results],
     Failed = length([x || {_, false} <- Results]),
@@ -835,6 +837,39 @@ stated_in(F = #{code := #{nodes := Nodes}}, I) ->
         {T, _} -> T
     end.
 
+%% ------------------------------------------------------------------ examples/three_nodes: a node program (contract T9.17)
+
+node_program() ->
+    Hub = e2s_codex:frames(["examples/three_nodes/hub.erl"], check),
+    A = e2s_codex:frames(["examples/three_nodes/edge_a.erl"], check),
+    Nodes = [B || {form, #{body := B = {node, _}}} <- Hub],
+    [{node, #{name := <<"hub@localhost">>, net := Net, tables := #{peers := Peers, remotes := Remotes, locals := Locals}}}] = Nodes,
+    Sends = [Name || {send_named, _, Name, _} <- node_list(Hub)],
+    Gaps = fun(Frames) -> [C || {form, #{body := {gap, #{construct := C}}}} <- Frames] end,
+    [{"nodes: every frame of the hub and of both edges passes check_frame",
+      lists:all(fun(F) -> check_frame:check(F) =:= ok end,
+                Hub ++ A ++ e2s_codex:frames(["examples/three_nodes/edge_c.erl"], check))},
+     {"nodes: -silica_node is one (:node) form: the hub listens for a and c, which EPMD finds (port 0)",
+      length(Nodes) =:= 1 andalso [{N, R, P} || #{name := N, role := R, port := P} <- Peers]
+      =:= [{<<"a@localhost">>, listen, 0}, {<<"c@localhost">>, listen, 0}]
+      andalso maps:get(epmd_port, Net) =:= 4369},
+     {"nodes: a registered name and its fields cross as a tag and field types",
+      [{N, T, F} || #{name := N, tag := T, fields := F} <- Locals] =:= [{<<"hub_in">>, <<"request">>, [<<"atom">>, <<"int64">>]}]
+      andalso [{N, Pe, T} || #{name := N, peer := Pe, tag := T} <- Remotes]
+      =:= [{<<"a_inbox">>, <<"a@localhost">>, <<"reply">>}, {<<"c_inbox">>, <<"c@localhost">>, <<"reply">>}]},
+     {"nodes: {Name, Node} ! Message to a declared remote is H39 (:send_named); the hub sends to a_inbox and c_inbox",
+      lists:sort(Sends) =:= [<<"a_inbox">>, <<"c_inbox">>]},
+     {"nodes: the edge sends one (:send_named) to hub_in, and nothing in the three programs is a gap",
+      [<<"hub_in">>] =:= [Name || {send_named, _, Name, _} <- node_list(A)] andalso Gaps(Hub) =:= [] andalso Gaps(A) =:= []},
+     {"nodes: a send to a node that is not declared is a gap that says so",
+      begin
+          Src = "-module(nn).\n-export([f/0]).\n-spec f() -> ok.\nf() -> {x, 'z@nowhere'} ! {hello, 1}, ok.\n",
+          File = filename:join("ebin", "nn.erl"),
+          ok = file:write_file(File, Src),
+          Fs = e2s_codex:frames([File], check),
+          lists:any(fun(N) -> case N of {gap_node, _, _, Note} -> binary:match(Note, <<"-silica_node">>) =/= nomatch; _ -> false end end, node_list(Fs))
+      end}].
+
 %% ------------------------------------------------------------------ examples/actors.erl
 
 actors() ->
@@ -1013,6 +1048,9 @@ with_listener(Serve, Client) ->
 online(Port) ->
     [check_mode("demo", ["examples/demo.erl"], Port),
      check_mode("actors", ["examples/actors.erl"], Port),
+     check_mode("three_nodes hub", ["examples/three_nodes/hub.erl"], Port),
+     check_mode("three_nodes edge_a", ["examples/three_nodes/edge_a.erl"], Port),
+     check_mode("three_nodes edge_c", ["examples/three_nodes/edge_c.erl"], Port),
      check_mode("150 functions, more than two credit windows", [filename:join("ebin", "many.erl")], Port),
      {"online: release of an unknown session answers freed = false",
       case e2s_sender:release("127.0.0.1", Port, <<"no-such-session">>) of
