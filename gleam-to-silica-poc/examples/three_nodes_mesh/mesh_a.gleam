@@ -1,0 +1,143 @@
+//// mesh_a: one node of the three-node mesh example (every node holds a link to both others).
+////
+////   ma@localhost <--dial-- mb@localhost
+////        ^                      ^
+////        +--dial-- mc@localhost +
+////
+//// mb dials ma, mc dials ma and mb: three links, one for each pair. A link carries messages both ways, so which end
+//// dialed does not matter to the programs. This node: listens for mb and mc.
+////
+//// Every node does the same two things. It serves requests on its registered name a_in: Request(reply_to, n) is
+//// answered with Reply("a_in", 2 * n), sent to the registered name reply_to on the node that asked. And it asks
+//// both other nodes to double a number, and prints each answer when it arrives at its registered name a_inbox.
+//// So six requests and six answers cross the three links, each link in both directions.
+////
+//// The //@silica_node lines declare the node (contract T9.17), as in examples/three_nodes. The last word of a
+//// `remote` line is the function that sends to that name. The entry is run/0, not main/0: BEES owns main.
+////
+
+//@silica_node name ma@localhost
+//@silica_node cookie_file cookie
+//@silica_node peer mb@localhost localhost listen
+//@silica_node peer mc@localhost localhost listen
+//@silica_node local a_in request String Int
+//@silica_node local a_inbox reply String Int
+//@silica_node remote b_in mb@localhost request String Int send_b_in
+//@silica_node remote c_in mc@localhost request String Int send_c_in
+//@silica_node remote b_inbox mb@localhost reply String Int send_b_inbox
+//@silica_node remote c_inbox mc@localhost reply String Int send_c_inbox
+
+import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process.{type Name, type Subject}
+import gleam/int
+import gleam/io
+import gleam/otp/actor
+import gleam/otp/static_supervisor as supervisor
+import gleam/otp/supervision
+
+/// What a peer asks: the registered name to answer to, and a number.
+pub type Ask {
+  Request(String, Int)
+}
+
+/// What a service answers: its own registered name, and the doubled number.
+pub type Answer {
+  Reply(String, Int)
+}
+
+/// The BEAM's own send, to a registered name on another node: `{Name, Node} ! Message`.
+@external(erlang, "erlang", "send")
+fn send_to_name(to: #(Atom, Atom), message: message) -> message
+
+/// The four sends to the other nodes' registered names. to-silica reads a call of each as (:send_named) and does
+/// not send these functions (the `remote` lines above name them); on the BEAM they are this send.
+fn send_b_in(message: Ask) -> Nil {
+  send_to_name(#(atom.create("b_in"), atom.create("mb@localhost")), message)
+  Nil
+}
+
+fn send_c_in(message: Ask) -> Nil {
+  send_to_name(#(atom.create("c_in"), atom.create("mc@localhost")), message)
+  Nil
+}
+
+fn send_b_inbox(message: Answer) -> Nil {
+  send_to_name(#(atom.create("b_inbox"), atom.create("mb@localhost")), message)
+  Nil
+}
+
+fn send_c_inbox(message: Answer) -> Nil {
+  send_to_name(#(atom.create("c_inbox"), atom.create("mc@localhost")), message)
+  Nil
+}
+
+/// The answer goes to the name on the node that asked, and says who answered.
+fn answer(reply_to: String, value: Int) -> Nil {
+  case reply_to {
+    "b_inbox" -> send_b_inbox(Reply("a_in", value))
+    "c_inbox" -> send_c_inbox(Reply("a_in", value))
+    _ -> Nil
+  }
+}
+
+fn handle_ask(served: Int, message: Ask) -> actor.Next(Int, Ask) {
+  case message {
+    Request(reply_to, n) -> {
+      io.println("a: request " <> int.to_string(n) <> " from " <> reply_to)
+      answer(reply_to, n * 2)
+      actor.continue(served + 1)
+    }
+  }
+}
+
+fn handle_answer(sum: Int, message: Answer) -> actor.Next(Int, Answer) {
+  case message {
+    Reply(from, value) -> {
+      io.println("a: " <> from <> " answered " <> int.to_string(value))
+      actor.continue(sum + value)
+    }
+  }
+}
+
+fn start_service(name: Name(Ask)) -> actor.StartResult(Subject(Ask)) {
+  actor.new(0)
+  |> actor.named(name)
+  |> actor.on_message(handle_ask)
+  |> actor.start
+}
+
+fn start_inbox(name: Name(Answer)) -> actor.StartResult(Subject(Answer)) {
+  actor.new(0)
+  |> actor.named(name)
+  |> actor.on_message(handle_answer)
+  |> actor.start
+}
+
+fn start_supervisor(
+  service: Name(Ask),
+  inbox: Name(Answer),
+) -> actor.StartResult(supervisor.Supervisor) {
+  supervisor.new(supervisor.OneForOne)
+  |> supervisor.add(
+    supervision.worker(fn() { start_service(service) })
+    |> supervision.restart(supervision.Transient),
+  )
+  |> supervisor.add(
+    supervision.worker(fn() { start_inbox(inbox) })
+    |> supervision.restart(supervision.Transient),
+  )
+  |> supervisor.start
+}
+
+/// Start the two actors, ask both other nodes, and stay up while the answers arrive and the other nodes ask this
+/// one.
+pub fn run() -> Nil {
+  let service: Name(Ask) = process.new_name("a_in")
+  let inbox: Name(Answer) = process.new_name("a_inbox")
+  let assert Ok(_) = start_supervisor(service, inbox)
+  send_b_in(Request("a_inbox", 11))
+  send_c_in(Request("a_inbox", 12))
+  let wait: Subject(Int) = process.new_subject()
+  let _ = process.receive(wait, 15_000)
+  Nil
+}

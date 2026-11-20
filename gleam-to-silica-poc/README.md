@@ -32,7 +32,9 @@ language side decides every type and every numeric conversion**; see "Types".
 | `examples/demo.gleam` | the example program: one small function for each construct of the subset, and a process that is spawned, sent to and received from. No gap |
 | `examples/actors.gleam` | a working application of three actors: a coordinator (`main`), a counter (a plain `gleam_otp` actor whose state is a record), and an auditor (a named `gleam_otp` actor under a `gleam_otp` static supervisor, restart `Transient`, written in the source). `gleam run -m actors` runs it (`test/actors.gleam` is its compiled copy) and prints `counter: total 9, adds 3, small`, `mean 3.0`, `auditor: 3 notes`; the transpiled program prints the same three lines. No gap |
 | `examples/three_nodes/` | a node program for each of three nodes: `hub.gleam`, `edge_a.gleam`, `edge_c.gleam` ("A node program" below; contract T9.17). No gap |
-| `test/` | the tests, `run_test.sh`, and `demo.gleam`, `actors.gleam` and `three_nodes/`, copies of the examples |
+| `examples/three_nodes_mesh/` | the complete mesh: `mesh_a.gleam`, `mesh_b.gleam`, `mesh_c.gleam`, each with a link to both others (`mb` dials `ma`; `mc` dials `ma` and `mb`; peer host `localhost`). Every node serves requests on `<x>_in` and asks both others to double a number. No gap; ran live 2026-11-20 (`../tools/node_kit/live_run_gleam_mesh_*.txt`) |
+| `examples/five_nodes_mesh/` | the complete mesh of five nodes: `mesh5_a.gleam` to `mesh5_e.gleam`, nodes `na` to `ne`, ten links (a node dials every node whose letter comes before its own). Every node asks the four others to double a number: twenty requests and twenty answers. No gap; ran live 2026-11-20 (`../tools/node_kit/live_run_gleam_mesh5_*.txt`) |
+| `test/` | the tests, `run_test.sh`, and `demo.gleam`, `actors.gleam`, `three_nodes/`, `three_nodes_mesh/` and `five_nodes_mesh/`, copies of the examples |
 | `test/fixtures/gaps.gleam` | what the examples used to leave out on purpose, kept for the tests: every function of it is a gap, holds one, or is answered by the transpiler with a gap of its own (a closure, tuple indexing, a call into another module, foreign code, a linked spawn, inter-node communication, supervisors that cannot be read, a name that is not read) |
 
 There is no hand-written Erlang. Everything is Gleam; Erlang is reached only through `@external` declarations of
@@ -729,6 +731,11 @@ been compiled: it was written 2026-11-16 on a machine with no Gleam).
   copies in `test/three_nodes/` are the examples, every frame of the three passes the contract's
   `check_frame:check/1`, no gap, no entry form and no form for the send functions, the hub's and an edge's
   `(:node)` form field by field, their `(:send_named)` nodes, `redial off` as 0 and 0, no form without a `name`).
+- **Five-node mesh tests (2026-11-20).** 72 passed with two more for `examples/five_nodes_mesh/`: the copies, and
+  every frame, the four peers of each node, how many it dials, and its eight `(:send_named)` names.
+- **Mesh tests (2026-11-20).** 70 passed with two more for `examples/three_nodes_mesh/`: the copies in
+  `test/three_nodes_mesh/` are the examples, and every frame passes `check_frame:check/1` with no gap, the peers
+  and redial of each node, and its four `(:send_named)` nodes.
 - **The examples are Gleam that type-checks**: `gleam test` compiles the copies in `test/three_nodes/`. They were
   changed to get there and to transpile: the entry is `run`, not `main`; the send functions hold the BEAM's send;
   and the message types have no field labels (`Request(String, Int)`, `Reply(Int)`): with labels a type of one

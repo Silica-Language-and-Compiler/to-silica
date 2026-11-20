@@ -3525,6 +3525,133 @@ pub fn three_nodes_frames_test() {
   })
 }
 
+const mesh_nodes = ["mesh_a", "mesh_b", "mesh_c"]
+
+fn mesh_frames(module: String) -> List(Frame) {
+  let file = "examples/three_nodes_mesh/" <> module <> ".gleam"
+  let assert Ok(text) = simplifile.read(file)
+  let assert Ok(frames) = codex.session([Source(file, text)], frame.Check)
+  frames
+}
+
+/// test/three_nodes_mesh/ holds the copies `gleam test` compiles.
+pub fn mesh_nodes_are_the_compiled_copies_test() {
+  list.each(mesh_nodes, fn(module) {
+    let assert Ok(shown) =
+      simplifile.read("examples/three_nodes_mesh/" <> module <> ".gleam")
+    let assert Ok(compiled) =
+      simplifile.read("test/three_nodes_mesh/" <> module <> ".gleam")
+    assert shown == compiled
+  })
+}
+
+/// The complete mesh: every frame has the schema's shape and none is a gap;
+/// a listens for both, b dials a and listens for c (a peer of each role), c
+/// dials both; only a node that dials states its redial; each node sends a
+/// request and an answer to both others (H39).
+pub fn mesh_nodes_test() {
+  let shapes =
+    list.map(mesh_nodes, fn(module) {
+      let frames = mesh_frames(module)
+      list.each(frames, fn(f) {
+        let decoded = term.decode(wire.encode(f))
+        assert decoded == wire.to_term(f)
+        assert check_frame(decoded) == atom("ok")
+      })
+      assert int.sum(list.map(frames, frame.gaps)) == 0
+      assert gap_constructs(nodes(frames)) == []
+      let assert frame.NodeDecl(peers:, redial_initial_ms:, redial_max_ms:, ..) =
+        node_form(frames)
+      let sends =
+        list.filter_map(nodes(frames), fn(node) {
+          case node {
+            frame.SendNamed(name:, ..) -> Ok(name)
+            _ -> Error(Nil)
+          }
+        })
+      #(
+        peers,
+        #(redial_initial_ms, redial_max_ms),
+        list.sort(sends, string.compare),
+      )
+    })
+  assert shapes
+    == [
+      #(
+        [
+          frame.NodePeer("mb@localhost", "localhost", 0, "listen"),
+          frame.NodePeer("mc@localhost", "localhost", 0, "listen"),
+        ],
+        #(-1, -1),
+        ["b_in", "b_inbox", "c_in", "c_inbox"],
+      ),
+      #(
+        [
+          frame.NodePeer("ma@localhost", "localhost", 0, "dial"),
+          frame.NodePeer("mc@localhost", "localhost", 0, "listen"),
+        ],
+        #(250, 4000),
+        ["a_in", "a_inbox", "c_in", "c_inbox"],
+      ),
+      #(
+        [
+          frame.NodePeer("ma@localhost", "localhost", 0, "dial"),
+          frame.NodePeer("mb@localhost", "localhost", 0, "dial"),
+        ],
+        #(250, 4000),
+        ["a_in", "a_inbox", "b_in", "b_inbox"],
+      ),
+    ]
+}
+
+const five_nodes = ["mesh5_a", "mesh5_b", "mesh5_c", "mesh5_d", "mesh5_e"]
+
+/// test/five_nodes_mesh/ holds the copies `gleam test` compiles.
+pub fn five_nodes_are_the_compiled_copies_test() {
+  list.each(five_nodes, fn(module) {
+    let assert Ok(shown) =
+      simplifile.read("examples/five_nodes_mesh/" <> module <> ".gleam")
+    let assert Ok(compiled) =
+      simplifile.read("test/five_nodes_mesh/" <> module <> ".gleam")
+    assert shown == compiled
+  })
+}
+
+/// The complete mesh of five nodes (ten links): every frame has the schema's
+/// shape and none is a gap; every node has four peers and the nodes dial 0,
+/// 1, 2, 3 and 4 of them; each node sends to eight names on other nodes.
+pub fn five_nodes_test() {
+  let dials =
+    list.map(five_nodes, fn(module) {
+      let file = "examples/five_nodes_mesh/" <> module <> ".gleam"
+      let assert Ok(text) = simplifile.read(file)
+      let assert Ok(frames) = codex.session([Source(file, text)], frame.Check)
+      list.each(frames, fn(f) {
+        let decoded = term.decode(wire.encode(f))
+        assert decoded == wire.to_term(f)
+        assert check_frame(decoded) == atom("ok")
+      })
+      assert int.sum(list.map(frames, frame.gaps)) == 0
+      assert gap_constructs(nodes(frames)) == []
+      let sends =
+        list.filter_map(nodes(frames), fn(node) {
+          case node {
+            frame.SendNamed(name:, ..) -> Ok(name)
+            _ -> Error(Nil)
+          }
+        })
+      assert list.length(list.unique(sends)) == 8
+      let assert frame.NodeDecl(peers:, ..) = node_form(frames)
+      assert list.length(peers) == 4
+      list.length(
+        list.filter(peers, fn(peer) {
+          peer == frame.NodePeer(peer.name, "localhost", 0, "dial")
+        }),
+      )
+    })
+  assert dials == [0, 1, 2, 3, 4]
+}
+
 /// The hub's declaration, and its two sends to names on other nodes (H39).
 pub fn hub_node_declaration_test() {
   let frames = three_nodes_frames("hub")
@@ -3568,10 +3695,12 @@ pub fn edge_node_declaration_test() {
     redial_max_ms: 4000,
     peers: [frame.NodePeer("hub@localhost", "127.0.0.1", 0, "dial")],
     remotes: [
-      frame.NodeRemote("hub_in", "hub@localhost", "request", [
-        "string",
-        "int64",
-      ]),
+      frame.NodeRemote(
+        "hub_in",
+        "hub@localhost",
+        "request",
+        ["string", "int64"],
+      ),
     ],
     locals: [frame.NodeLocal("a_inbox", "reply", ["int64"])],
     ..,

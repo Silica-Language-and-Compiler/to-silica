@@ -952,7 +952,8 @@ you must send for it. A node outside these rules is not written: its function be
     writes them for a unit the sink printed. BEES owns `main`, so a node program's entry is a function other than
     `main/0` (the examples use `run/0`), which the root starts. BEES connects **every `peer`
     line** (BEAM mode, BEES N2b): a `dial` peer is dialed, and all `listen` peers share the node's one listener, so a hub
-    holds a link to each of its edges (run live 2026-11-17). A peer host is an IPv4 literal or a name; a node that dials
+    holds a link to each of its edges (run live 2026-11-17). A node may have peers of both roles, so three nodes can be
+    a complete mesh (run live 2026-11-19; five nodes with ten links, 2026-11-20). A peer host is an IPv4 literal or a name; a node that dials
     a name is built with BEES's resolver edge (`bees_edge_gen.py --resolve`, which `build_node.sh` adds; run live
     2026-11-18).
 

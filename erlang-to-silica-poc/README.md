@@ -372,6 +372,17 @@ process picks the send by that field, as `answer/2` of `examples/three_nodes/hub
 `examples/three_nodes/` is the hub topology: `hub.erl` listens, `edge_a.erl` and `edge_c.erl` dial it, each edge asks
 the hub's `hub_in` to double a number and receives `{reply, N}` on its own inbox. All three convert with no gap.
 
+`examples/three_nodes_mesh/` is the complete mesh: `mesh_a.erl`, `mesh_b.erl` and `mesh_c.erl`, each with a link to
+both others (`mb` dials `ma`; `mc` dials `ma` and `mb`). A node may mix `listen` and `dial` peers, as `mesh_b` does.
+Every node serves requests on `<x>_in` and asks both other nodes to double a number, so six requests and six
+answers cross the three links, each link in both directions. All three convert with no gap and ran live on
+2026-11-19 (`../tools/node_kit/live_run_mesh_*.txt`).
+
+`examples/five_nodes_mesh/` is the complete mesh of five nodes: `mesh5_a` to `mesh5_e`, nodes `na` to `ne`, ten links. A node
+dials every node whose letter comes before its own and listens for the rest. Every node asks the four others to
+double a number, so twenty requests and twenty answers cross the ten links, each link in both directions. All five
+convert with no gap and ran live on 2026-11-20 (`../tools/node_kit/live_run_mesh5_*.txt`).
+
 | | Sent as a gap |
 | --- | --- |
 | `Pid ! Message` to a pid on another node, `spawn/4` on another node, `monitor_node`, `net_kernel`, `global`, `rpc` | yes (no meaning: BEES sends to registered names) |
