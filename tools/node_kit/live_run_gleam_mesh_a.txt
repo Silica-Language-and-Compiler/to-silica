@@ -1,0 +1,23 @@
+[bees] mode=beam node=ma@localhost transport=tcp auth=cookie creation=1 epmd=external epmd_port=4369 net_tick io_ms=60000 tick_ms=15000 links=2 mb@localhost:listen,mc@localhost:listen frame_size_max=4294967295
+[bees] BEAM mode: Erlang cookie authentication, no encryption (transport tcp, 127.0.0.1); a downgrade from TRUST
+[bees audit] epmd: registered (the node keeps its own creation) ma 59656
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from mb@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with mb@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from mc@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with mc@localhost 1
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: c_in answered 24
+[silica] root actor exited (no supervisor)
+a: b_in answered 22
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: request 21 from [silica] root actor exited (no supervisor)
+b_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: request 31 from c_inbox

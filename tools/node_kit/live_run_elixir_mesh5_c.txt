@@ -1,0 +1,57 @@
+[bees] mode=beam node=nc@localhost transport=tcp auth=cookie creation=1 epmd=external epmd_port=4369 net_tick io_ms=60000 tick_ms=15000 links=4 na@localhost:dial:epmd,nb@localhost:dial:epmd,nd@localhost:listen,ne@localhost:listen frame_size_max=4294967295
+[bees] BEAM mode: Erlang cookie authentication, no encryption (transport tcp, 127.0.0.1); a downgrade from TRUST
+[bees audit] epmd: registered (the node keeps its own creation) nc 60825
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees] resolve localhost: ok 127.0.0.1
+[bees] resolve localhost: ok 127.0.0.1
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] epmd: found, dialing na 0
+[bees audit] epmd: found, dialing nb 0
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from nb@localhost 0
+[bees audit] cookie digest accepted from na@localhost 0
+[bees audit] handshake complete with nb@localhost 1
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with na@localhost 0
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from nd@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with nd@localhost 2
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from ne@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with ne@localhost 3
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+{:c_got_request, 13, :a_inbox}
+[silica] root actor exited (no supervisor)
+{:c_got_request, 23, :b_inbox}
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+{:c_got_answer, :d_in, 68}[silica] root actor exited (no supervisor)
+
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+{:c_got_answer, :e_in, 70}
+[silica] root actor exited (no supervisor)
+{:c_got_answer, :b_in, 64}
+{:c_got_answer, :a_in, 62}
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+{:c_got_request, 43, :d_inbox}
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+{:c_got_request, 53, :e_inbox}

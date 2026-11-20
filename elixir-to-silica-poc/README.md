@@ -539,6 +539,17 @@ a name or node the attribute does not declare is a gap that says so. BEES's limi
 `examples/three_nodes/` is the hub topology: `hub.ex` listens; `edge_a.ex` and `edge_c.ex` dial it, ask `:hub_in` to
 double a number and receive `{:reply, n}` on their own inbox. All three convert with no gap.
 
+`examples/three_nodes_mesh/` is the complete mesh: `mesh_a.ex`, `mesh_b.ex` and `mesh_c.ex`, each with a link to both
+others (`mb` dials `ma`; `mc` dials `ma` and `mb`). A node may mix `:listen` and `:dial` peers, as `MeshB` does. Every
+node serves requests on `:<x>_in` and asks both other nodes to double a number, so six requests and six answers cross
+the three links, each link in both directions. All three convert with no gap and ran live on 2026-11-20
+(`../tools/node_kit/live_run_elixir_mesh_*.txt`).
+
+`examples/five_nodes_mesh/` is the complete mesh of five nodes: `mesh5_a` to `mesh5_e`, nodes `na` to `ne`, ten links. A node
+dials every node whose letter comes before its own and listens for the rest. Every node asks the four others to
+double a number, so twenty requests and twenty answers cross the ten links, each link in both directions. All five
+convert with no gap and ran live on 2026-11-20 (`../tools/node_kit/live_run_elixir_mesh5_*.txt`).
+
 ## How to run
 
 Needs Elixir 1.15 or later (built with 1.20.5 on OTP 29).

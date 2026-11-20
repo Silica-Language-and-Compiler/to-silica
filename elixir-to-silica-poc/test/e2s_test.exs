@@ -1814,6 +1814,64 @@ defmodule E2sTest do
     end
   end
 
+  describe "examples/three_nodes_mesh, a complete mesh of three nodes" do
+    setup do
+      %{mesh: for(x <- ~w(a b c), do: Codex.frames(["examples/three_nodes_mesh/mesh_#{x}.ex"], :check))}
+    end
+
+    test "every frame of the three programs passes check_frame, and none is a gap", %{mesh: mesh} do
+      for frames <- mesh do
+        for frame <- frames, do: assert(:check_frame.check(frame) == :ok, "#{inspect(frame, limit: 6)}")
+        assert gaps(frames) == 0
+      end
+    end
+
+    test "a listens for both, b dials a and listens for c, c dials both; only a node that dials states redial", %{mesh: mesh} do
+      decls = for frames <- mesh, do: hd(for({:form, %{body: {:node, node}}} <- frames, do: node))
+
+      assert for(d <- decls, do: for(p <- d.tables.peers, do: {p.name, p.role})) == [
+               [{"mb@localhost", :listen}, {"mc@localhost", :listen}],
+               [{"ma@localhost", :dial}, {"mc@localhost", :listen}],
+               [{"ma@localhost", :dial}, {"mb@localhost", :dial}]
+             ]
+
+      assert for(d <- decls, do: {d.timing.redial_initial_ms, d.timing.redial_max_ms}) == [{-1, -1}, {250, 4000}, {250, 4000}]
+    end
+
+    test "each node sends a request and an answer to both others (H39)", %{mesh: mesh} do
+      assert for(frames <- mesh, do: for({:send_named, _, name, _} <- nodes(frames), do: name) |> Enum.sort()) == [
+               ~w(b_in b_inbox c_in c_inbox),
+               ~w(a_in a_inbox c_in c_inbox),
+               ~w(a_in a_inbox b_in b_inbox)
+             ]
+    end
+  end
+
+  describe "examples/five_nodes_mesh, a complete mesh of five nodes (ten links)" do
+    setup do
+      %{five: for(x <- ~w(a b c d e), do: Codex.frames(["examples/five_nodes_mesh/mesh5_#{x}.ex"], :check))}
+    end
+
+    test "every frame of the five programs passes check_frame, and none is a gap", %{five: five} do
+      for frames <- five do
+        for frame <- frames, do: assert(:check_frame.check(frame) == :ok, "#{inspect(frame, limit: 6)}")
+        assert gaps(frames) == 0
+      end
+    end
+
+    test "every node has four peers and the nodes dial 0, 1, 2, 3 and 4 of them", %{five: five} do
+      peers = for frames <- five, do: hd(for({:form, %{body: {:node, node}}} <- frames, do: node.tables.peers))
+      assert Enum.map(peers, &length/1) == [4, 4, 4, 4, 4]
+      assert for(ps <- peers, do: Enum.count(ps, &(&1.role == :dial))) == [0, 1, 2, 3, 4]
+    end
+
+    test "each node sends a request and an answer to all four others (H39)", %{five: five} do
+      for frames <- five do
+        assert for({:send_named, _, name, _} <- nodes(frames), do: name) |> Enum.uniq() |> length() == 8
+      end
+    end
+  end
+
   describe "online" do
     unless System.get_env("TO_SILICA_PORT") do
       @tag skip: "TO_SILICA_PORT is not set: the check-mode session with a transpiler did not run"

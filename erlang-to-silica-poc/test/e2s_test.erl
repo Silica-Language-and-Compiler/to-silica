@@ -868,7 +868,42 @@ node_program() ->
           ok = file:write_file(File, Src),
           Fs = e2s_codex:frames([File], check),
           lists:any(fun(N) -> case N of {gap_node, _, _, Note} -> binary:match(Note, <<"-silica_node">>) =/= nomatch; _ -> false end end, node_list(Fs))
-      end}].
+      end}
+     | mesh_program()].
+
+%% examples/three_nodes_mesh: every node has a link to both others; mesh_b has a peer of each role.
+mesh_program() ->
+    [MA, MB, MC] = [e2s_codex:frames(["examples/three_nodes_mesh/mesh_" ++ X ++ ".erl"], check) || X <- ["a", "b", "c"]],
+    Decl = fun(Frames) -> [{node, D}] = [B || {form, #{body := B = {node, _}}} <- Frames], D end,
+    Roles = fun(Frames) -> [{N, R} || #{name := N, role := R} <- maps:get(peers, maps:get(tables, Decl(Frames)))] end,
+    Redial = fun(Frames) -> #{redial_initial_ms := I, redial_max_ms := M} = maps:get(timing, Decl(Frames)), {I, M} end,
+    Sends = fun(Frames) -> lists:sort([Name || {send_named, _, Name, _} <- node_list(Frames)]) end,
+    [{"mesh: every frame of the three programs passes check_frame, and none is a gap",
+      lists:all(fun(F) -> check_frame:check(F) =:= ok end, MA ++ MB ++ MC)
+      andalso [] =:= [C || {form, #{body := {gap, #{construct := C}}}} <- MA ++ MB ++ MC]},
+     {"mesh: a listens for both, b dials a and listens for c, c dials both; only a node that dials states redial",
+      Roles(MA) =:= [{<<"mb@localhost">>, listen}, {<<"mc@localhost">>, listen}]
+      andalso Roles(MB) =:= [{<<"ma@localhost">>, dial}, {<<"mc@localhost">>, listen}]
+      andalso Roles(MC) =:= [{<<"ma@localhost">>, dial}, {<<"mb@localhost">>, dial}]
+      andalso [Redial(MA), Redial(MB), Redial(MC)] =:= [{-1, -1}, {250, 4000}, {250, 4000}]},
+     {"mesh: each node sends a request and an answer to both others (H39)",
+      Sends(MA) =:= [<<"b_in">>, <<"b_inbox">>, <<"c_in">>, <<"c_inbox">>]
+      andalso Sends(MB) =:= [<<"a_in">>, <<"a_inbox">>, <<"c_in">>, <<"c_inbox">>]
+      andalso Sends(MC) =:= [<<"a_in">>, <<"a_inbox">>, <<"b_in">>, <<"b_inbox">>]}
+     | mesh5_program()].
+
+%% examples/five_nodes_mesh: five nodes, a link for each of the ten pairs; a node dials the letters before its own.
+mesh5_program() ->
+    Five = [e2s_codex:frames(["examples/five_nodes_mesh/mesh5_" ++ [X] ++ ".erl"], check) || X <- "abcde"],
+    Peers = fun(Frames) -> [{node, D}] = [B || {form, #{body := B = {node, _}}} <- Frames], maps:get(peers, maps:get(tables, D)) end,
+    Dials = [length([P || P = #{role := dial} <- Peers(Frames)]) || Frames <- Five],
+    [{"mesh5: every frame of the five programs passes check_frame, and none is a gap",
+      lists:all(fun(F) -> check_frame:check(F) =:= ok end, lists:append(Five))
+      andalso [] =:= [C || {form, #{body := {gap, #{construct := C}}}} <- lists:append(Five)]},
+     {"mesh5: every node has four peers and the nodes dial 0, 1, 2, 3 and 4 of them: ten links",
+      [length(Peers(Frames)) || Frames <- Five] =:= [4, 4, 4, 4, 4] andalso Dials =:= [0, 1, 2, 3, 4]},
+     {"mesh5: each node sends a request and an answer to all four others (H39)",
+      lists:all(fun(Frames) -> length(lists:usort([Name || {send_named, _, Name, _} <- node_list(Frames)])) =:= 8 end, Five)}].
 
 %% ------------------------------------------------------------------ examples/actors.erl
 
@@ -1051,6 +1086,10 @@ online(Port) ->
      check_mode("three_nodes hub", ["examples/three_nodes/hub.erl"], Port),
      check_mode("three_nodes edge_a", ["examples/three_nodes/edge_a.erl"], Port),
      check_mode("three_nodes edge_c", ["examples/three_nodes/edge_c.erl"], Port),
+     check_mode("mesh a", ["examples/three_nodes_mesh/mesh_a.erl"], Port),
+     check_mode("mesh b", ["examples/three_nodes_mesh/mesh_b.erl"], Port),
+     check_mode("mesh c", ["examples/three_nodes_mesh/mesh_c.erl"], Port),
+     check_mode("mesh5 c", ["examples/five_nodes_mesh/mesh5_c.erl"], Port),
      check_mode("150 functions, more than two credit windows", [filename:join("ebin", "many.erl")], Port),
      {"online: release of an unknown session answers freed = false",
       case e2s_sender:release("127.0.0.1", Port, <<"no-such-session">>) of
