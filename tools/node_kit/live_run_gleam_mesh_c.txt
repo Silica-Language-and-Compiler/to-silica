@@ -15,22 +15,22 @@
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[bees audit] cookie digest accepted from ma@localhost 0
-[silica] root actor exited (no supervisor)
-[bees audit] handshake complete with ma@localhost 0
 [bees audit] cookie digest accepted from mb@localhost 0
 [silica] root actor exited (no supervisor)
 [bees audit] handshake complete with mb@localhost 1
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from ma@localhost 0
+[bees audit] handshake complete with ma@localhost 0
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
 c: request 12 from a_inbox
+[silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 c: request 22 from b_inbox
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
-c: a_in answered 62[silica] root actor exited (no supervisor)
-
+c: a_in answered 62
 [silica] root actor exited (no supervisor)
 c: b_in answered 64
 [silica] root actor exited (no supervisor)

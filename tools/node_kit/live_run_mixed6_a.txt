@@ -1,0 +1,53 @@
+[bees] mode=beam node=xa@localhost transport=tcp auth=cookie creation=1 epmd=external epmd_port=4369 net_tick io_ms=60000 tick_ms=15000 links=5 xb@localhost:listen,xc@localhost:listen,xd@localhost:listen,xe@localhost:listen,xf@localhost:listen frame_size_max=4294967295
+[bees] BEAM mode: Erlang cookie authentication, no encryption (transport tcp, 127.0.0.1); a downgrade from TRUST
+[bees audit] epmd: registered (the node keeps its own creation) xa 56228
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xb@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with xb@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xc@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with xc@localhost 1
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xd@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with xd@localhost 2
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xe@localhost 0
+[bees audit] handshake complete with xe@localhost 3
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xf@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with xf@localhost 4
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: e_in answered 30
+a: c_in answered [silica] root actor exited (no supervisor)
+26
+[silica] root actor exited (no supervisor)
+a: d_in answered 28
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: b_in answered 24
+[silica] root actor exited (no supervisor)
+a: f_in answered 32
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: request 21 from b_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: request 31 from c_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: request 41 from d_inbox
+[silica] root actor exited (no supervisor)
+a: request 51 from e_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+a: request 61 from f_inbox

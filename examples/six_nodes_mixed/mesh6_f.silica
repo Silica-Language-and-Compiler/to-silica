@@ -1,0 +1,121 @@
+// mesh6_f: one node of the six-node mixed mesh (every node holds a link to all five others: fifteen links).
+//
+// The six nodes are written in four languages: xa and xd in Erlang, xb and xe in Elixir, xc in Gleam, and xf in
+// Silica by hand. All are @localhost. A node dials every node whose letter comes before its own and listens for the
+// rest, so each pair has one link. This node: dials xa, xb, xc, xd, xe.
+//
+// Every node does the same two things, whatever its language. It serves requests on its registered name f_in: a
+// request names the registered name to answer to (an atom) and a number, and is answered with this node's f_in
+// and twice the number. And it asks all five other nodes to double a number (node 1..6 asks node 1..6 for the number
+// 10 * asker + asked), and prints each answer when it arrives at its registered name f_inbox. So thirty requests
+// and thirty answers cross the fifteen links, each link in both directions.
+//
+// Distribution is BEES's BEAM mode: EPMD and a cookie (contract T9.17).
+//
+// This unit is written by hand, not printed by to-silica. It has the two functions the node's main calls
+// (tools/node_kit/build_node.sh writes that main with BEES's tools): to_silica_start/0, which starts the node's
+// registered actors, and run__spawn/0, which starts the actor that asks. Nothing in it mentions the network: BEES
+// registers a proxy under each remote name of mesh6_f.wire, so a cast to :a_in goes to xa@localhost, and a message
+// another node sends to f_in or f_inbox arrives as an ordinary message of the actor registered under that name.
+module mesh6_f;
+
+export to_silica_start/0;
+export run__spawn/0;
+
+fn say(x: string) -> atom {
+    sequence proc[device_io]
+        o: atom <- print(x)
+    produces pure o end
+}
+
+fn say_int(x: int64) -> atom {
+    sequence proc[device_io]
+        o: atom <- print_int64(x)
+    produces pure o end
+}
+
+// A cast to a registered name: a proxy of BEES for a name on another node.
+fn send_named(to: atom, m: (:request, atom, int64) | (:reply, atom, int64)) -> boolean {
+    sequence proc[concurrency]
+        b: boolean <- cast_registered(to, m impl ActorMessage {})
+    produces pure b end
+}
+
+// The answer goes to the name on the node that asked, and says who answered.
+fn answer(reply_to: atom, v: int64) -> boolean {
+    case reply_to of {
+        :a_inbox -> send_named(:a_inbox, (:reply, :f_in, v));
+        :b_inbox -> send_named(:b_inbox, (:reply, :f_in, v));
+        :c_inbox -> send_named(:c_inbox, (:reply, :f_in, v));
+        :d_inbox -> send_named(:d_inbox, (:reply, :f_in, v));
+        :e_inbox -> send_named(:e_inbox, (:reply, :f_in, v));
+        _: atom -> false
+    }
+}
+
+// ---- the service, registered as f_in: the state is how many requests it has answered
+fn serve(msg: (:request, atom, int64)) -> boolean {
+    case msg of {
+        (:request, reply_to: atom, n: int64) -> {
+            _: atom <- say("f: request ");
+            _: atom <- say_int(n);
+            _: atom <- say(" from ");
+            _: atom <- say(atom_name(reply_to));
+            _: atom <- say("\n");
+            answer(reply_to, n * 2)
+        }
+    }
+}
+
+fn service(msg: (:request, atom, int64), served: int64) -> (:no_reply, int64) {
+    sequence
+        _: boolean <- serve(msg)
+    produces pure (:no_reply, served + 1) end
+}
+
+// ---- the inbox, registered as f_inbox: the state is the sum of the answers so far
+fn show(msg: (:reply, atom, int64)) -> int64 {
+    case msg of {
+        (:reply, from: atom, v: int64) -> {
+            _: atom <- say("f: ");
+            _: atom <- say(atom_name(from));
+            _: atom <- say(" answered ");
+            _: atom <- say_int(v);
+            _: atom <- say("\n");
+            v
+        }
+    }
+}
+
+fn inbox(msg: (:reply, atom, int64), sum: int64) -> (:no_reply, int64) {
+    sequence
+        v: int64 <- show(msg)
+    produces pure (:no_reply, sum + v) end
+}
+
+// ---- the actor that asks the five other nodes, once, when it is sent its start message
+fn asker(msg: int64, asked: int64) -> (:no_reply, int64) {
+    sequence
+        _: boolean <- send_named(:a_in, (:request, :f_inbox, 61));
+        _: boolean <- send_named(:b_in, (:request, :f_inbox, 62));
+        _: boolean <- send_named(:c_in, (:request, :f_inbox, 63));
+        _: boolean <- send_named(:d_in, (:request, :f_inbox, 64));
+        _: boolean <- send_named(:e_in, (:request, :f_inbox, 65))
+    produces pure (:no_reply, asked + 1) end
+}
+
+// Called once by the node's main, after the node has started: the two registered actors.
+fn to_silica_start() -> boolean {
+    sequence proc[concurrency]
+        _: actor_ref <- spawn_registered(0, service, :f_in, stack_policy(0, :keep_last_message), state_policy(:keep_state_area));
+        _: actor_ref <- spawn_registered(0, inbox, :f_inbox, stack_policy(0, :keep_last_message), state_policy(:keep_state_area))
+    produces pure true end
+}
+
+// Called by the node's main when the links have had time to come up: start the asker and tell it to ask.
+fn run__spawn() -> actor_ref {
+    sequence proc[concurrency]
+        a: actor_ref <- spawn(0, asker, stack_policy(0, :keep_last_message), state_policy(:keep_state_area));
+        _: boolean <- cast(a, 0 impl ActorMessage {})
+    produces pure a end
+}

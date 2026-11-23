@@ -1,0 +1,20 @@
+# The manifest of node xf@localhost (BEAM mode: EPMD), written by hand for mesh6_f.silica.
+node xf@localhost
+creation 1
+peer xa@localhost localhost 4369 dial
+peer xb@localhost localhost 4369 dial
+peer xc@localhost localhost 4369 dial
+peer xd@localhost localhost 4369 dial
+peer xe@localhost localhost 4369 dial
+remote a_in @ xa@localhost cast (atom, atom, int64)
+remote b_in @ xb@localhost cast (atom, atom, int64)
+remote c_in @ xc@localhost cast (atom, atom, int64)
+remote d_in @ xd@localhost cast (atom, atom, int64)
+remote e_in @ xe@localhost cast (atom, atom, int64)
+remote a_inbox @ xa@localhost cast (atom, atom, int64)
+remote b_inbox @ xb@localhost cast (atom, atom, int64)
+remote c_inbox @ xc@localhost cast (atom, atom, int64)
+remote d_inbox @ xd@localhost cast (atom, atom, int64)
+remote e_inbox @ xe@localhost cast (atom, atom, int64)
+local f_in cast (atom, atom, int64)
+local f_inbox cast (atom, atom, int64)

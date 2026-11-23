@@ -3674,7 +3674,7 @@ pub fn hub_node_declaration_test() {
         frame.NodeRemote("a_inbox", "a@localhost", "reply", ["int64"]),
         frame.NodeRemote("c_inbox", "c@localhost", "reply", ["int64"]),
       ],
-      locals: [frame.NodeLocal("hub_in", "request", ["string", "int64"])],
+      locals: [frame.NodeLocal("hub_in", "request", ["atom", "int64"])],
     )
   let sends =
     list.filter_map(nodes(frames), fn(node) {
@@ -3695,12 +3695,7 @@ pub fn edge_node_declaration_test() {
     redial_max_ms: 4000,
     peers: [frame.NodePeer("hub@localhost", "127.0.0.1", 0, "dial")],
     remotes: [
-      frame.NodeRemote(
-        "hub_in",
-        "hub@localhost",
-        "request",
-        ["string", "int64"],
-      ),
+      frame.NodeRemote("hub_in", "hub@localhost", "request", ["atom", "int64"]),
     ],
     locals: [frame.NodeLocal("a_inbox", "reply", ["int64"])],
     ..,

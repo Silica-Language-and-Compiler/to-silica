@@ -8,7 +8,7 @@
 //// dialed does not matter to the programs. This node: listens for mb and mc.
 ////
 //// Every node does the same two things. It serves requests on its registered name a_in: Request(reply_to, n) is
-//// answered with Reply("a_in", 2 * n), sent to the registered name reply_to on the node that asked. And it asks
+//// answered with Reply(AIn, 2 * n), sent to the registered name reply_to on the node that asked. And it asks
 //// both other nodes to double a number, and prints each answer when it arrives at its registered name a_inbox.
 //// So six requests and six answers cross the three links, each link in both directions.
 ////
@@ -20,12 +20,12 @@
 //@silica_node cookie_file cookie
 //@silica_node peer mb@localhost localhost listen
 //@silica_node peer mc@localhost localhost listen
-//@silica_node local a_in request String Int
-//@silica_node local a_inbox reply String Int
-//@silica_node remote b_in mb@localhost request String Int send_b_in
-//@silica_node remote c_in mc@localhost request String Int send_c_in
-//@silica_node remote b_inbox mb@localhost reply String Int send_b_inbox
-//@silica_node remote c_inbox mc@localhost reply String Int send_c_inbox
+//@silica_node local a_in request Atom Int
+//@silica_node local a_inbox reply Atom Int
+//@silica_node remote b_in mb@localhost request Atom Int send_b_in
+//@silica_node remote c_in mc@localhost request Atom Int send_c_in
+//@silica_node remote b_inbox mb@localhost reply Atom Int send_b_inbox
+//@silica_node remote c_inbox mc@localhost reply Atom Int send_c_inbox
 
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Subject}
@@ -35,14 +35,36 @@ import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 
+/// The registered names of the mesh. A constructor without fields is an atom on the BEAM (`AInbox` is `a_inbox`),
+/// so a name crosses a node as the atom the Erlang and Elixir programs of the same example send.
+pub type Who {
+  AIn
+  AInbox
+  BIn
+  BInbox
+  CIn
+  CInbox
+}
+
+fn who_text(who: Who) -> String {
+  case who {
+    AIn -> "a_in"
+    AInbox -> "a_inbox"
+    BIn -> "b_in"
+    BInbox -> "b_inbox"
+    CIn -> "c_in"
+    CInbox -> "c_inbox"
+  }
+}
+
 /// What a peer asks: the registered name to answer to, and a number.
 pub type Ask {
-  Request(String, Int)
+  Request(Who, Int)
 }
 
 /// What a service answers: its own registered name, and the doubled number.
 pub type Answer {
-  Reply(String, Int)
+  Reply(Who, Int)
 }
 
 /// The BEAM's own send, to a registered name on another node: `{Name, Node} ! Message`.
@@ -72,10 +94,10 @@ fn send_c_inbox(message: Answer) -> Nil {
 }
 
 /// The answer goes to the name on the node that asked, and says who answered.
-fn answer(reply_to: String, value: Int) -> Nil {
+fn answer(reply_to: Who, value: Int) -> Nil {
   case reply_to {
-    "b_inbox" -> send_b_inbox(Reply("a_in", value))
-    "c_inbox" -> send_c_inbox(Reply("a_in", value))
+    BInbox -> send_b_inbox(Reply(AIn, value))
+    CInbox -> send_c_inbox(Reply(AIn, value))
     _ -> Nil
   }
 }
@@ -83,7 +105,9 @@ fn answer(reply_to: String, value: Int) -> Nil {
 fn handle_ask(served: Int, message: Ask) -> actor.Next(Int, Ask) {
   case message {
     Request(reply_to, n) -> {
-      io.println("a: request " <> int.to_string(n) <> " from " <> reply_to)
+      io.println(
+        "a: request " <> int.to_string(n) <> " from " <> who_text(reply_to),
+      )
       answer(reply_to, n * 2)
       actor.continue(served + 1)
     }
@@ -93,7 +117,9 @@ fn handle_ask(served: Int, message: Ask) -> actor.Next(Int, Ask) {
 fn handle_answer(sum: Int, message: Answer) -> actor.Next(Int, Answer) {
   case message {
     Reply(from, value) -> {
-      io.println("a: " <> from <> " answered " <> int.to_string(value))
+      io.println(
+        "a: " <> who_text(from) <> " answered " <> int.to_string(value),
+      )
       actor.continue(sum + value)
     }
   }
@@ -135,8 +161,8 @@ pub fn run() -> Nil {
   let service: Name(Ask) = process.new_name("a_in")
   let inbox: Name(Answer) = process.new_name("a_inbox")
   let assert Ok(_) = start_supervisor(service, inbox)
-  send_b_in(Request("a_inbox", 11))
-  send_c_in(Request("a_inbox", 12))
+  send_b_in(Request(AInbox, 11))
+  send_c_in(Request(AInbox, 12))
   let wait: Subject(Int) = process.new_subject()
   let _ = process.receive(wait, 15_000)
   Nil

@@ -731,6 +731,13 @@ been compiled: it was written 2026-11-16 on a machine with no Gleam).
   copies in `test/three_nodes/` are the examples, every frame of the three passes the contract's
   `check_frame:check/1`, no gap, no entry form and no form for the send functions, the hub's and an edge's
   `(:node)` form field by field, their `(:send_named)` nodes, `redial off` as 0 and 0, no form without a `name`).
+- **Names cross a node as atoms (2026-11-20).** The node examples (`three_nodes/`, `three_nodes_mesh/`,
+  `five_nodes_mesh/`) used to send the name to answer to as a `String`, so their wire shape was
+  `(atom, string, int64)` and a Gleam node could not exchange messages with an Erlang or Elixir node of the same
+  example (`payload refused bad_tag`). They now declare the field as `Atom` and carry it as a constructor without
+  fields of a type `Who` (`AInbox` is the atom `a_inbox` on the BEAM and in Silica), which gives
+  `(atom, atom, int64)`. All eleven transpile with no gap and ran live again; a Gleam node runs in one mesh with
+  Erlang, Elixir and hand-written Silica nodes (`../examples/six_nodes_mixed/`).
 - **Five-node mesh tests (2026-11-20).** 72 passed with two more for `examples/five_nodes_mesh/`: the copies, and
   every frame, the four peers of each node, how many it dials, and its eight `(:send_named)` names.
 - **Mesh tests (2026-11-20).** 70 passed with two more for `examples/three_nodes_mesh/`: the copies in
@@ -738,7 +745,7 @@ been compiled: it was written 2026-11-16 on a machine with no Gleam).
   and redial of each node, and its four `(:send_named)` nodes.
 - **The examples are Gleam that type-checks**: `gleam test` compiles the copies in `test/three_nodes/`. They were
   changed to get there and to transpile: the entry is `run`, not `main`; the send functions hold the BEAM's send;
-  and the message types have no field labels (`Request(String, Int)`, `Reply(Int)`): with labels a type of one
+  and the message types have no field labels (`Request(Who, Int)`, `Reply(Int)`): with labels a type of one
   constructor is the record idiom, sent as a `(:record)`, and the transpiler prints only a symbol or a tagged
   tuple as a message (`T4002`, one gap in each unit before the change).
 - **Sink.** Each of `hub.gleam`, `edge_a.gleam`, `edge_c.gleam`: check mode `ok (units 1, gaps 0, rejected 0,
@@ -760,7 +767,7 @@ so the node is declared in comment lines the sender reads from the source text:
 //@silica_node name hub@localhost
 //@silica_node cookie_file cookie
 //@silica_node peer a@localhost 127.0.0.1 listen
-//@silica_node local hub_in request String Int
+//@silica_node local hub_in request Atom Int
 //@silica_node remote a_inbox a@localhost reply Int send_a_inbox
 ```
 

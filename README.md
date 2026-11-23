@@ -35,6 +35,7 @@ All proof of concept compilers are required to have -poc at the end of their nam
 | understand **how the sink is designed** | [silica-sink/silica_sink_design.md](silica-sink/silica_sink_design.md) |
 | run the **sink's trials** | `silica-sink/trials/run_trials.sh <work-dir> <port> [all]` |
 | see **three nodes that send messages to each other** (hub topology, BEES BEAM mode) | `examples/three_nodes/` in each PoC, and contract T9.17 |
+| see **a complete mesh** (three nodes, five nodes), and **six nodes of four languages in one mesh** (Erlang, Elixir, Gleam, hand-written Silica) | `examples/three_nodes_mesh/` and `examples/five_nodes_mesh/` in each PoC; [examples/six_nodes_mixed/](examples/six_nodes_mixed/) |
 | see **what was found when real apps went through** | [APP_GAPS.md](APP_GAPS.md) (newest first) |
 | get **Silica source out** of the sink | [tools/export_debug_output.py](tools/export_debug_output.py) (provisional exporter) |
 

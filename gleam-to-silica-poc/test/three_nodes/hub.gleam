@@ -12,11 +12,12 @@
 //// the function itself, whose body is the BEAM's send. The entry is run/0, not main/0: BEES owns the node program's
 //// main, which starts the node and then starts run/0.
 ////
+
 //@silica_node name hub@localhost
 //@silica_node cookie_file cookie
 //@silica_node peer a@localhost 127.0.0.1 listen
 //@silica_node peer c@localhost 127.0.0.1 listen
-//@silica_node local hub_in request String Int
+//@silica_node local hub_in request Atom Int
 //@silica_node remote a_inbox a@localhost reply Int send_a_inbox
 //@silica_node remote c_inbox c@localhost reply Int send_c_inbox
 
@@ -27,9 +28,23 @@ import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 
+/// The registered names an answer can go to. A constructor without fields is an atom on the BEAM (`AInbox` is `a_inbox`),
+/// so a name crosses a node as the atom the Erlang and Elixir programs of the same example send.
+pub type Who {
+  AInbox
+  CInbox
+}
+
+fn who_text(who: Who) -> String {
+  case who {
+    AInbox -> "a_inbox"
+    CInbox -> "c_inbox"
+  }
+}
+
 /// What a peer asks: the registered name to answer to, and a number.
 pub type HubMessage {
-  Request(String, Int)
+  Request(Who, Int)
 }
 
 /// What the hub answers (and what an edge's inbox receives).
@@ -56,30 +71,24 @@ fn send_c_inbox(message: Reply) -> Nil {
 }
 
 /// The answer goes to the name on the node that asked.
-fn answer(reply_to: String, value: Int) -> Nil {
+fn answer(reply_to: Who, value: Int) -> Nil {
   case reply_to {
-    "a_inbox" -> send_a_inbox(Reply(value))
-    "c_inbox" -> send_c_inbox(Reply(value))
-    _ -> Nil
+    AInbox -> send_a_inbox(Reply(value))
+    CInbox -> send_c_inbox(Reply(value))
   }
 }
 
-fn handle(
-  served: Int,
-  message: HubMessage,
-) -> actor.Next(Int, HubMessage) {
+fn handle(served: Int, message: HubMessage) -> actor.Next(Int, HubMessage) {
   case message {
     Request(reply_to, n) -> {
-      io.println("hub: request from " <> reply_to)
+      io.println("hub: request from " <> who_text(reply_to))
       answer(reply_to, n * 2)
       actor.continue(served + 1)
     }
   }
 }
 
-fn start_hub(
-  name: Name(HubMessage),
-) -> actor.StartResult(Subject(HubMessage)) {
+fn start_hub(name: Name(HubMessage)) -> actor.StartResult(Subject(HubMessage)) {
   actor.new(0)
   |> actor.named(name)
   |> actor.on_message(handle)

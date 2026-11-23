@@ -12,59 +12,59 @@
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
-[bees audit] epmd: found, dialing nb 0
-[bees audit] epmd: found, dialing nd 0
-[bees audit] epmd: found, dialing na 0
 [bees audit] epmd: found, dialing nc 0
+[bees audit] epmd: found, dialing na 0
+[bees audit] epmd: found, dialing nb 0
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
+[bees audit] epmd: found, dialing nd 0
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[bees audit] cookie digest accepted from na@localhost 0
-[silica] root actor exited (no supervisor)
-[bees audit] handshake complete with na@localhost 0
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-[bees audit] cookie digest accepted from nc@localhost 0
-[bees audit] handshake complete with nc@localhost 2
 [silica] root actor exited (no supervisor)
 [bees audit] cookie digest accepted from nd@localhost 0
 [bees audit] handshake complete with nd@localhost 3
 [silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
 [bees audit] cookie digest accepted from nb@localhost 0
 [bees audit] handshake complete with nb@localhost 1
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from nc@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with nc@localhost 2
+[bees audit] cookie digest accepted from na@localhost 0
+[bees audit] handshake complete with na@localhost 0
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 e: request 15 from a_inbox
 [silica] root actor exited (no supervisor)
-e: request 25 from [silica] root actor exited (no supervisor)
-b_inbox
+[silica] root actor exited (no supervisor)
+e: request 25 from b_inbox
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 e: request 35 from c_inbox
 [silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
 e: request 45 from d_inbox
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
-e: a_in answered 102
+[silica] root actor exited (no supervisor)
+e: b_in answered 104
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 [silica] root actor exited (no supervisor)
 e: d_in answered 108
 [silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
 e: c_in answered 106
-[silica] root actor exited (no supervisor)
-[silica] root actor exited (no supervisor)
-e: b_in answered 104
+e: a_in answered 102

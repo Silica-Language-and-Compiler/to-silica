@@ -1,0 +1,18 @@
+# The atoms mesh6_f.silica writes as literals (BEES compiler guide A1.2).
+request
+reply
+no_reply
+keep_last_message
+keep_state_area
+a_in
+a_inbox
+b_in
+b_inbox
+c_in
+c_inbox
+d_in
+d_inbox
+e_in
+e_inbox
+f_in
+f_inbox

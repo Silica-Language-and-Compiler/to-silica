@@ -1,0 +1,87 @@
+[bees] mode=beam node=xf@localhost transport=tcp auth=cookie creation=1 epmd=external epmd_port=4369 net_tick io_ms=60000 tick_ms=15000 links=5 xa@localhost:dial:epmd,xb@localhost:dial:epmd,xc@localhost:dial:epmd,xd@localhost:dial:epmd,xe@localhost:dial:epmd frame_size_max=4294967295
+[bees] BEAM mode: Erlang cookie authentication, no encryption (transport tcp, 127.0.0.1); a downgrade from TRUST
+[silica] root actor exited (no supervisor)
+[bees] resolve localhost: ok 127.0.0.1
+[bees] resolve localhost: ok 127.0.0.1
+[bees] resolve localhost: ok 127.0.0.1
+[bees] resolve localhost: ok 127.0.0.1
+[bees] resolve localhost: ok 127.0.0.1
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] epmd: found, dialing xc 0
+[bees audit] epmd: found, dialing xd 0
+[bees audit] epmd: found, dialing xe 0
+[bees audit] epmd: found, dialing xa 0
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] epmd: found, dialing xb 0
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xe@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with xe@localhost 4
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xc@localhost 0
+[bees audit] handshake complete with xc@localhost 2
+[bees audit] cookie digest accepted from xb@localhost 0
+[silica] root actor exited (no supervisor)
+[bees audit] handshake complete with xb@localhost 1
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xd@localhost 0
+[bees audit] handshake complete with xd@localhost 3
+[silica] root actor exited (no supervisor)
+[bees audit] cookie digest accepted from xa@localhost 0
+[bees audit] handshake complete with xa@localhost 0
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+f: request 16 from a_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+f: request 26 from b_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+f: request 36 from c_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+f: request 46 from d_inbox
+[silica] root actor exited (no supervisor)
+f: request 56 from e_inbox
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+f: b_in answered 124
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+f: c_in answered 126
+f: a_in answered 122
+[silica] root actor exited (no supervisor)
+[silica] root actor exited (no supervisor)
+f: d_in[silica] root actor exited (no supervisor)
+ answered 128
+[silica] root actor exited (no supervisor)
+f: e_in answered 130

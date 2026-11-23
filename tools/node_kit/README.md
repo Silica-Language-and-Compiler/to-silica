@@ -63,4 +63,17 @@ language every node completed four handshakes, answered four requests and printe
 and twenty answers, with the twenty expected values (`live_run_mesh5_*.txt`, `live_run_elixir_mesh5_*.txt`,
 `live_run_gleam_mesh5_*.txt`).
 
+**Run 2026-11-20: nodes of different languages in one mesh.** First the five-node mesh with `na` and `nd` from the
+Erlang set, `nb` and `ne` from the Elixir set and `nc` from the Gleam set: all ten links came up and the Erlang and
+Elixir nodes exchanged everything, but every message to or from the Gleam node was refused (`payload refused
+bad_tag`), because the Gleam examples sent the name to answer to as a string and the others as an atom. The Gleam
+node examples now send it as an atom (a constructor without fields); the Gleam hub, three-node mesh and five-node
+mesh were transpiled, built and run again (`live_run_gleam_*.txt` are these runs).
+
+**Run 2026-11-20: six nodes, four languages** (`examples/six_nodes_mixed/`): `xa` and `xd` Erlang, `xb` and `xe`
+Elixir, `xc` Gleam, and `xf` a Silica unit written by hand, built by `build_node.sh` from its own `.wire`,
+`.bees.config` and `.atoms` (the script only needs the unit to have `to_silica_start/0` and `run__spawn/0`). Fifteen
+links, start delay 6000 ms. Every node completed five handshakes, answered five requests and printed five answers:
+thirty requests and thirty answers with the expected values, nothing refused (`live_run_mixed6_*.txt`).
+
 A node is one compilation unit: the leaf's `silica.config` lists the program's unit and the BEES units, one compiler run compiles them. `build_node.sh` uses BEES's `trial.mk`, which assembles the compiler's per-unit output and links it; that is BEES's stand-in and goes when BEES becomes a source library (project-bees N0c).
